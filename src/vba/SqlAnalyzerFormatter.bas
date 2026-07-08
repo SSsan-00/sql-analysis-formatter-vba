@@ -86,7 +86,6 @@ Private Sub LoadMappings(ByVal wsRef As Worksheet, ByVal qualifiedMap As Object,
     Dim lastRow As Long
     Dim rowNumber As Long
     Dim tableId As String
-    Dim tableName As String
     Dim fieldId As String
     Dim fieldName As String
     Dim key As Variant
@@ -100,13 +99,12 @@ Private Sub LoadMappings(ByVal wsRef As Worksheet, ByVal qualifiedMap As Object,
     lastRow = LastUsedRow(wsRef)
     For rowNumber = 2 To lastRow
         tableId = NormalizeKey(wsRef.Cells(rowNumber, COL_TABLE_ID).Value)
-        tableName = NormalizeName(wsRef.Cells(rowNumber, COL_TABLE_NAME).Value)
         fieldId = NormalizeKey(wsRef.Cells(rowNumber, COL_FIELD_ID).Value)
         fieldName = NormalizeName(wsRef.Cells(rowNumber, COL_FIELD_NAME).Value)
 
         If Len(fieldId) > 0 And IsUsableJapaneseName(fieldName) Then
-            If Len(tableId) > 0 And tableId <> "-" And IsUsableJapaneseName(tableName) Then
-                qualifiedMap(tableId & "." & fieldId) = tableName & "." & fieldName
+            If Len(tableId) > 0 And tableId <> "-" Then
+                qualifiedMap(tableId & "." & fieldId) = tableId & "." & fieldName
             End If
 
             If Not conflictTokens.Exists(fieldId) Then
