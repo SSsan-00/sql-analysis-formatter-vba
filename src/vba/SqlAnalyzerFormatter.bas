@@ -53,6 +53,7 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     End If
 
     lastRow = LastUsedRowInColumn(wsSql, COL_SQL)
+    ' 前回の出力だけを消し、入力SQLは残す
     clearLastRow = MaxLong(lastRow, LastUsedRowInColumn(wsSql, COL_REPLACEMENT))
     If clearLastRow >= 2 Then
         wsSql.Range(wsSql.Cells(2, COL_RESULT), wsSql.Cells(clearLastRow, COL_REPLACEMENT)).ClearContents
@@ -101,6 +102,7 @@ Private Sub LoadMappings(ByVal wsRef As Worksheet, ByVal qualifiedMap As Object,
     uniqueTokens.CompareMode = vbBinaryCompare
     conflictTokens.CompareMode = vbBinaryCompare
 
+    ' 単独フィールドIDは和名が一意に決まる場合だけ採用
     lastRow = LastUsedRow(wsRef)
     For rowNumber = 2 To lastRow
         tableId = NormalizeKey(wsRef.Cells(rowNumber, COL_TABLE_ID).Value)
@@ -143,6 +145,7 @@ Private Function ApplyMappings(ByVal sourceText As String, ByVal qualifiedMap As
     Set notes = CreateObject("Scripting.Dictionary")
     notes.CompareMode = vbBinaryCompare
 
+    ' 修飾付き識別子を先に処理し、単独IDとの重複置換を避ける
     For Each key In SortedKeysByLengthDesc(qualifiedMap)
         replacementText = CStr(qualifiedMap(CStr(key)))
         changeCount = 0
@@ -181,12 +184,14 @@ Private Function ReplaceIdentifier(ByVal sourceText As String, ByVal searchText 
     Set re = CreateObject("VBScript.RegExp")
     re.Global = True
     re.IgnoreCase = False
+    ' 識別子の一部一致を避けるため、前後を英数字とアンダースコア以外に限定
     re.Pattern = "(^|[^A-Za-z0-9_])" & EscapeRegexLiteral(searchText) & "([^A-Za-z0-9_]|$)"
 
     Set matches = re.Execute(sourceText)
     changeCount = matches.Count
     resultText = sourceText
 
+    ' 後方から置換し、FirstIndexのずれを防ぐ
     For index = matches.Count - 1 To 0 Step -1
         Set matchItem = matches.Item(index)
         prefix = CStr(matchItem.SubMatches(0))
@@ -228,6 +233,7 @@ Private Function SortedKeysByLengthDesc(ByVal dictionary As Object) As Variant
         Exit Function
     End If
 
+    ' 長いキーを先に処理し、包含関係にあるIDの誤置換を防ぐ
     keys = dictionary.Keys
     For outerIndex = LBound(keys) To UBound(keys) - 1
         For innerIndex = outerIndex + 1 To UBound(keys)
@@ -410,6 +416,7 @@ Private Function W(ParamArray codes() As Variant) As String
     Dim index As Long
     Dim resultText As String
 
+    ' VBEインポート時の文字化けを避けるため、UI文字列はコードポイントで保持
     For index = LBound(codes) To UBound(codes)
         resultText = resultText & ChrW$(CLng(codes(index)))
     Next index
