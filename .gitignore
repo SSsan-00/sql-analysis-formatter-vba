@@ -1,0 +1,10 @@
+# Office temporary files
+~$*
+
+# Local editor files
+.vscode/
+.idea/
+
+# OS metadata
+Thumbs.db
+Desktop.ini
