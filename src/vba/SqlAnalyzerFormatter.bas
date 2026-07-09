@@ -49,6 +49,7 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
         If showMessage Then
             MsgBox NoDefinitionMessage(), vbInformation
         End If
+        RestoreFindSearchOrderByRows wsSql
         Exit Sub
     End If
 
@@ -70,10 +71,10 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
 
     wsSql.Columns(COL_RESULT).WrapText = False
     SetReplacementColumnsWrapText wsSql, False, LastUsedColumn(wsSql)
-    RestoreFindSearchOrderByRows wsSql
     If showMessage Then
         MsgBox AnalyzeDoneMessage(), vbInformation
     End If
+    RestoreFindSearchOrderByRows wsSql
 End Sub
 
 ' 確認後、各シートの2行目以降をクリアしてヘッダーを復元
@@ -93,10 +94,10 @@ Public Sub ClearData(Optional ByVal showMessage As Boolean = True)
     ClearRowsBelowHeader wsRef, COL_FIELD_NAME
     ClearRowsBelowHeader wsSql, COL_REPLACEMENT
     RestoreHeaders wsRef, wsSql
-    RestoreFindSearchOrderByRows wsSql
     If showMessage Then
         MsgBox ClearDoneMessage(), vbInformation
     End If
+    RestoreFindSearchOrderByRows wsSql
 End Sub
 
 ' 変換定義シートから修飾付きIDと単独IDの変換表を作成
@@ -501,6 +502,7 @@ End Sub
 Private Sub RestoreFindSearchOrderByRows(ByVal ws As Worksheet)
     Dim foundCell As Range
 
+    Application.FindFormat.Clear
     Set foundCell = ws.Cells.Find( _
         What:="*", _
         After:=ws.Cells(1, 1), _
@@ -508,6 +510,8 @@ Private Sub RestoreFindSearchOrderByRows(ByVal ws As Worksheet)
         LookAt:=xlPart, _
         SearchOrder:=xlByRows, _
         SearchDirection:=xlNext, _
+        MatchCase:=False, _
+        MatchByte:=False, _
         SearchFormat:=False)
 End Sub
 
@@ -537,25 +541,56 @@ End Function
 
 ' シート全体の最終使用行を取得
 Private Function LastUsedRow(ByVal ws As Worksheet) As Long
-    Dim foundCell As Range
+    Dim dataRange As Range
+    Dim area As Range
+    Dim areaLastRow As Long
 
-    Set foundCell = ws.Cells.Find(What:="*", After:=ws.Cells(1, 1), LookIn:=xlFormulas, LookAt:=xlPart, SearchOrder:=xlByRows, SearchDirection:=xlPrevious)
-    If foundCell Is Nothing Then
-        LastUsedRow = 1
-    Else
-        LastUsedRow = foundCell.Row
-    End If
+    LastUsedRow = 1
+    Set dataRange = UsedValueCells(ws)
+    If dataRange Is Nothing Then Exit Function
+
+    For Each area In dataRange.Areas
+        areaLastRow = area.Row + area.Rows.Count - 1
+        If areaLastRow > LastUsedRow Then
+            LastUsedRow = areaLastRow
+        End If
+    Next area
 End Function
 
 ' シート全体の最終使用列を取得
 Private Function LastUsedColumn(ByVal ws As Worksheet) As Long
-    Dim foundCell As Range
+    Dim dataRange As Range
+    Dim area As Range
+    Dim areaLastColumn As Long
 
-    Set foundCell = ws.Cells.Find(What:="*", After:=ws.Cells(1, 1), LookIn:=xlFormulas, LookAt:=xlPart, SearchOrder:=xlByColumns, SearchDirection:=xlPrevious)
-    If foundCell Is Nothing Then
-        LastUsedColumn = 1
+    LastUsedColumn = 1
+    Set dataRange = UsedValueCells(ws)
+    If dataRange Is Nothing Then Exit Function
+
+    For Each area In dataRange.Areas
+        areaLastColumn = area.Column + area.Columns.Count - 1
+        If areaLastColumn > LastUsedColumn Then
+            LastUsedColumn = areaLastColumn
+        End If
+    Next area
+End Function
+
+' Find設定を汚さず、値または数式が入っているセルだけを取得
+Private Function UsedValueCells(ByVal ws As Worksheet) As Range
+    Dim constantCells As Range
+    Dim formulaCells As Range
+
+    On Error Resume Next
+    Set constantCells = ws.Cells.SpecialCells(xlCellTypeConstants)
+    Set formulaCells = ws.Cells.SpecialCells(xlCellTypeFormulas)
+    On Error GoTo 0
+
+    If constantCells Is Nothing Then
+        Set UsedValueCells = formulaCells
+    ElseIf formulaCells Is Nothing Then
+        Set UsedValueCells = constantCells
     Else
-        LastUsedColumn = foundCell.Column
+        Set UsedValueCells = Union(constantCells, formulaCells)
     End If
 End Function
 
