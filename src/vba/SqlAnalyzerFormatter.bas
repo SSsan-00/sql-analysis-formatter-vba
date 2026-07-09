@@ -70,6 +70,7 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
 
     wsSql.Columns(COL_RESULT).WrapText = False
     SetReplacementColumnsWrapText wsSql, False, LastUsedColumn(wsSql)
+    RestoreFindSearchOrderByRows wsSql
     If showMessage Then
         MsgBox AnalyzeDoneMessage(), vbInformation
     End If
@@ -92,6 +93,7 @@ Public Sub ClearData(Optional ByVal showMessage As Boolean = True)
     ClearRowsBelowHeader wsRef, COL_FIELD_NAME
     ClearRowsBelowHeader wsSql, COL_REPLACEMENT
     RestoreHeaders wsRef, wsSql
+    RestoreFindSearchOrderByRows wsSql
     If showMessage Then
         MsgBox ClearDoneMessage(), vbInformation
     End If
@@ -493,6 +495,20 @@ Private Sub WriteReplacementValues(ByVal wsSql As Worksheet, ByVal rowNumber As 
     For index = LBound(keys) To UBound(keys)
         wsSql.Cells(rowNumber, COL_REPLACEMENT + index).Value = CStr(keys(index))
     Next index
+End Sub
+
+' Excel検索ダイアログの検索方向を行へ戻す
+Private Sub RestoreFindSearchOrderByRows(ByVal ws As Worksheet)
+    Dim foundCell As Range
+
+    Set foundCell = ws.Cells.Find( _
+        What:="*", _
+        After:=ws.Cells(1, 1), _
+        LookIn:=xlFormulas, _
+        LookAt:=xlPart, _
+        SearchOrder:=xlByRows, _
+        SearchDirection:=xlNext, _
+        SearchFormat:=False)
 End Sub
 
 ' 指定シートの2行目以降を使用範囲に合わせてクリア
