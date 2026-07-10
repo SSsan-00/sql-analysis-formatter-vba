@@ -1,4 +1,4 @@
-# SQL Analyzer Formatter
+# SQL Analysis Formatter
 
 Excel マクロで SQL の識別子を対応表の和名に変換するツールです。
 
@@ -53,7 +53,7 @@ SQL は A 列の 2 行目以降へ、1 行ずつ入力します。
 
 ### マクロ付きブックを使う場合
 
-1. `SqlAnalyzerFormatter.xlsm` をダウンロードします。
+1. `SqlAnalysisFormatter.xlsm` をダウンロードします。
 2. Excel で開き、必要に応じてマクロを有効化します。
 3. `変換定義` シートに変換定義を入力します。
 4. `SQL解析` シートの A 列 2 行目以降に SQL を入力します。
@@ -62,23 +62,23 @@ SQL は A 列の 2 行目以降へ、1 行ずつ入力します。
 ### `.bas` から導入する場合
 
 1. Excel で対象ブックを開き、`Alt + F11` で VBA エディターを開きます。
-2. `ファイル` -> `ファイルのインポート` から `src/vba/SqlAnalyzerFormatter.bas` を取り込みます。
+2. `ファイル` -> `ファイルのインポート` から `src/vba/SqlAnalysisFormatter.bas` を取り込みます。
 3. VBA エディターで `SetupWorkbook` を実行します。
 4. ブックを `.xlsm` 形式で保存します。
 
-利用者が取り込む `.bas` は `src/vba/SqlAnalyzerFormatter.bas` だけです。
-`src/vba/SqlAnalyzerFormatterTests.bas` は開発者用のテストモジュールなので、通常利用時は取り込みません。
+利用者が取り込む `.bas` は `src/vba/SqlAnalysisFormatter.bas` だけです。
+`src/vba/SqlAnalysisFormatterTests.bas` は開発者用のテストモジュールなので、通常利用時は取り込みません。
 
 ## 開発者向け
 
-VBA ソースは `src/vba/SqlAnalyzerFormatter.bas` で管理しています。
-Excel ブックへ反映する場合は、既存の `SqlAnalyzerFormatter` モジュールを削除してから再インポートしてください。
+VBA ソースは `src/vba/SqlAnalysisFormatter.bas` で管理しています。
+Excel ブックへ反映する場合は、既存の `SqlAnalysisFormatter` モジュールを削除してから再インポートしてください。
 配布用ブックにはテストモジュールを含めず、本体モジュールだけを入れます。
 
 ### テスト
 
 開発時は変更後に必ずテストを実行します。
-テスト用VBAソースは `src/vba/SqlAnalyzerFormatterTests.bas` です。
+テスト用VBAソースは `src/vba/SqlAnalysisFormatterTests.bas` です。
 Rubberduck VBA のテスト注釈を付けています。
 Rubberduckを使わない場合は、次のスクリプトを実行します。
 
@@ -86,7 +86,7 @@ Rubberduckを使わない場合は、次のスクリプトを実行します。
 powershell -ExecutionPolicy Bypass -File tools/run-vba-tests.ps1
 ```
 
-このスクリプトは一時コピーしたブックに本体モジュールとテストモジュールを取り込み、`RunAllSqlAnalyzerFormatterTests` を実行します。
-保存済みの `SqlAnalyzerFormatter.xlsm` にはテストモジュールを残しません。
+このスクリプトは一時コピーしたブックに本体モジュールとテストモジュールを取り込み、`RunAllSqlAnalysisFormatterTests` を実行します。
+保存済みの `SqlAnalysisFormatter.xlsm` にはテストモジュールを残しません。
 
 CRUDテストケースの内容は `tests/CRUD_TEST_CASES.md` にまとめています。

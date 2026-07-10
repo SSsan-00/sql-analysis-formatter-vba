@@ -1,4 +1,4 @@
-Attribute VB_Name = "SqlAnalyzerFormatter"
+Attribute VB_Name = "SqlAnalysisFormatter"
 Option Explicit
 
 Private Const REF_LEGACY_SHEET As String = "Sheet1"

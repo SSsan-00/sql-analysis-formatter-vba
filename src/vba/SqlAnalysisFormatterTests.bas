@@ -1,4 +1,4 @@
-Attribute VB_Name = "SqlAnalyzerFormatterTests"
+Attribute VB_Name = "SqlAnalysisFormatterTests"
 Option Explicit
 
 '@TestModule
@@ -9,14 +9,14 @@ Private Const COL_RESULT As Long = 2
 Private Const COL_REPLACEMENT As Long = 3
 
 ' テスト一式をまとめて実行
-Public Sub RunAllSqlAnalyzerFormatterTests(Optional ByVal showMessage As Boolean = True)
+Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean = True)
     On Error GoTo TestFail
 
     SetupWorkbook_CreatesOutputSheet
     AnalyzeQueries_ConvertsCrudFixtures
 
     If showMessage Then
-        MsgBox "SqlAnalyzerFormatter tests passed.", vbInformation
+        MsgBox "SqlAnalysisFormatter tests passed.", vbInformation
     End If
     Exit Sub
 
@@ -481,7 +481,7 @@ Private Sub AssertCellValue(ByVal cell As Range, ByVal expected As String)
 End Sub
 
 Private Sub Fail(ByVal message As String)
-    Err.Raise vbObjectError + 513, "SqlAnalyzerFormatterTests", message
+    Err.Raise vbObjectError + 513, "SqlAnalysisFormatterTests", message
 End Sub
 
 ' VBEインポート時の文字化けを避けるため、テスト文字列もコードポイントで保持

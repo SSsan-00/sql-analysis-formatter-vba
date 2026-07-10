@@ -1,10 +1,10 @@
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
-$workbookPath = Join-Path $repoRoot 'SqlAnalyzerFormatter.xlsm'
-$mainModulePath = Join-Path $repoRoot 'src\vba\SqlAnalyzerFormatter.bas'
-$testModulePath = Join-Path $repoRoot 'src\vba\SqlAnalyzerFormatterTests.bas'
-$tempWorkbookPath = Join-Path $env:TEMP ('SqlAnalyzerFormatter_Tests_' + [guid]::NewGuid().ToString('N') + '.xlsm')
+$workbookPath = Join-Path $repoRoot 'SqlAnalysisFormatter.xlsm'
+$mainModulePath = Join-Path $repoRoot 'src\vba\SqlAnalysisFormatter.bas'
+$testModulePath = Join-Path $repoRoot 'src\vba\SqlAnalysisFormatterTests.bas'
+$tempWorkbookPath = Join-Path $env:TEMP ('SqlAnalysisFormatter_Tests_' + [guid]::NewGuid().ToString('N') + '.xlsm')
 
 function Release-ComObject {
     param([object]$ComObject)
@@ -25,7 +25,7 @@ try {
     $workbook = $excel.Workbooks.Open($tempWorkbookPath)
     $components = $workbook.VBProject.VBComponents
 
-    foreach ($moduleName in @('SqlAnalyzerFormatter', 'SqlAnalyzerFormatterTests')) {
+    foreach ($moduleName in @('SqlAnalysisFormatter', 'SqlAnalysisFormatterTests')) {
         try {
             $components.Remove($components.Item($moduleName))
         } catch {
@@ -34,7 +34,7 @@ try {
 
     $components.Import($mainModulePath) | Out-Null
     $components.Import($testModulePath) | Out-Null
-    $excel.Run("'$tempWorkbookPath'!RunAllSqlAnalyzerFormatterTests", $false) | Out-Null
+    $excel.Run("'$tempWorkbookPath'!RunAllSqlAnalysisFormatterTests", $false) | Out-Null
 
     Write-Output 'VBA tests passed.'
 } finally {
