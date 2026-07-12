@@ -80,10 +80,11 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     RestoreFindSearchOrderByRows wsSql
 End Sub
 
-' 確認後、各シートの2行目以降をクリアしてヘッダーを復元
+' 確認後、入力シートの2行目以降とアウトプットシートをクリア
 Public Sub ClearData(Optional ByVal showMessage As Boolean = True)
     Dim wsRef As Worksheet
     Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
 
     If showMessage Then
         If MsgBox(ClearConfirmMessage(), vbQuestion + vbYesNo + vbDefaultButton2, ConfirmTitle()) <> vbYes Then
@@ -93,9 +94,11 @@ Public Sub ClearData(Optional ByVal showMessage As Boolean = True)
 
     Set wsRef = GetReferenceSheet()
     Set wsSql = GetSqlSheet()
+    Set wsOutput = GetOutputSheet()
 
     ClearRowsBelowHeader wsRef, COL_FIELD_NAME
     ClearRowsBelowHeader wsSql, COL_REPLACEMENT
+    ClearOutputSheet wsOutput
     RestoreHeaders wsRef, wsSql
     If showMessage Then
         MsgBox ClearDoneMessage(), vbInformation
@@ -592,6 +595,11 @@ Private Sub RestoreFindSearchOrderByRows(ByVal ws As Worksheet)
         MatchCase:=False, _
         MatchByte:=False, _
         SearchFormat:=False)
+End Sub
+
+' アウトプットシートの内容だけをクリア
+Private Sub ClearOutputSheet(ByVal ws As Worksheet)
+    ws.Cells.ClearContents
 End Sub
 
 ' 指定シートの2行目以降を使用範囲に合わせてクリア

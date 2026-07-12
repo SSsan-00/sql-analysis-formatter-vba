@@ -15,6 +15,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     SetupWorkbook_CreatesOutputSheet
     AnalyzeQueries_ConvertsCrudFixtures
     AnalyzeQueries_ConvertsTsqlFunctionFixtures
+    ClearData_ClearsOutputSheet
 
     If showMessage Then
         MsgBox "SqlAnalysisFormatter tests passed.", vbInformation
@@ -103,6 +104,22 @@ Public Sub AnalyzeQueries_ConvertsTsqlFunctionFixtures()
         Array("users." & UserIdText(), "orders." & OrderIdText(), "orders." & OrderUserIdText())
     AssertAnalyzeRow wsSql, 16, ExpectedTsqlExistsSql(), _
         Array("users." & UserIdText(), "orders." & OrderUserIdText(), "orders." & AmountText())
+End Sub
+
+'@TestMethod("ClearData")
+Public Sub ClearData_ClearsOutputSheet()
+    Dim wsOutput As Worksheet
+
+    SetupWorkbook
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+    wsOutput.Cells(1, 1).Value = "output header"
+    wsOutput.Cells(3, 2).Value = "output detail"
+
+    ClearData False
+
+    AssertCellValue wsOutput.Cells(1, 1), ""
+    AssertCellValue wsOutput.Cells(3, 2), ""
+    AssertOutputSheetFont
 End Sub
 
 ' CRUDを含む解析テスト用データを作成
