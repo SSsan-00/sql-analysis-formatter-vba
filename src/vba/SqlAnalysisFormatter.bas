@@ -606,12 +606,158 @@ End Function
 Private Function BuildOutputQueryBlocks(ByVal queryText As String) As Collection
     Dim blocks As Collection
 
+    Set blocks = TryBuildExternalOutputBlocks(queryText)
+    If Not blocks Is Nothing Then
+        Set BuildOutputQueryBlocks = blocks
+        Exit Function
+    End If
+
     Set blocks = New Collection
     CollectSubqueryBlocks queryText, blocks
     blocks.Add NormalizeOutputQueryBlock(queryText)
 
     Set BuildOutputQueryBlocks = blocks
 End Function
+
+' 外部parserでアウトプット用ブロックを作成
+Private Function TryBuildExternalOutputBlocks(ByVal queryText As String) As Collection
+    Dim parserPath As String
+    Dim inputPath As String
+    Dim outputPath As String
+    Dim exitCode As Long
+    Dim outputText As String
+
+    On Error GoTo CleanUp
+
+    parserPath = ResolveParserExePath()
+    If Len(parserPath) = 0 Then
+        Exit Function
+    End If
+
+    inputPath = TemporaryFilePath("saf_sql_", ".sql")
+    outputPath = TemporaryFilePath("saf_blocks_", ".txt")
+    WriteUtf8TextFile inputPath, queryText
+
+    exitCode = RunParserProcess(parserPath, inputPath, outputPath)
+    If exitCode <> 0 Or Not FileExists(outputPath) Then
+        GoTo CleanUp
+    End If
+
+    outputText = ReadUnicodeTextFile(outputPath)
+    Set TryBuildExternalOutputBlocks = SplitOutputBlocks(outputText)
+
+CleanUp:
+    DeleteFileIfExists inputPath
+    DeleteFileIfExists outputPath
+End Function
+
+' parser exeの配置先を解決
+Private Function ResolveParserExePath() As String
+    Dim envPath As String
+    Dim basePath As String
+    Dim candidatePath As Variant
+
+    envPath = Environ$("SQL_ANALYSIS_FORMATTER_PARSER_EXE")
+    If Len(envPath) > 0 And FileExists(envPath) Then
+        ResolveParserExePath = envPath
+        Exit Function
+    End If
+
+    basePath = ThisWorkbook.Path
+    For Each candidatePath In Array( _
+        basePath & Application.PathSeparator & "SqlAnalysisFormatter.Parser.exe", _
+        basePath & Application.PathSeparator & "tools" & Application.PathSeparator & "SqlAnalysisFormatter.Parser.exe", _
+        basePath & Application.PathSeparator & "dist" & Application.PathSeparator & "parser" & Application.PathSeparator & "SqlAnalysisFormatter.Parser.exe")
+        If FileExists(CStr(candidatePath)) Then
+            ResolveParserExePath = CStr(candidatePath)
+            Exit Function
+        End If
+    Next candidatePath
+End Function
+
+' parser exeを同期実行
+Private Function RunParserProcess(ByVal parserPath As String, ByVal inputPath As String, ByVal outputPath As String) As Long
+    Dim shell As Object
+    Dim commandText As String
+
+    commandText = QuoteCommandArgument(parserPath) & _
+        " --input " & QuoteCommandArgument(inputPath) & _
+        " --output " & QuoteCommandArgument(outputPath) & _
+        " --format vba-blocks"
+
+    Set shell = CreateObject("WScript.Shell")
+    RunParserProcess = CLng(shell.Run(commandText, 0, True))
+End Function
+
+' parser出力をブロック単位へ分割
+Private Function SplitOutputBlocks(ByVal outputText As String) As Collection
+    Dim blocks As Collection
+    Dim values As Variant
+    Dim index As Long
+
+    Set blocks = New Collection
+    values = Split(outputText, OutputBlockSeparator())
+    For index = LBound(values) To UBound(values)
+        blocks.Add CStr(values(index))
+    Next index
+
+    Set SplitOutputBlocks = blocks
+End Function
+
+' UTF-8でテキストファイルへ書き込み
+Private Sub WriteUtf8TextFile(ByVal filePath As String, ByVal contentText As String)
+    Dim stream As Object
+
+    Set stream = CreateObject("ADODB.Stream")
+    stream.Type = 2
+    stream.Charset = "utf-8"
+    stream.Open
+    stream.WriteText contentText
+    stream.SaveToFile filePath, 2
+    stream.Close
+End Sub
+
+' UTF-16でテキストファイルを読み込み
+Private Function ReadUnicodeTextFile(ByVal filePath As String) As String
+    Dim stream As Object
+
+    Set stream = CreateObject("ADODB.Stream")
+    stream.Type = 2
+    stream.Charset = "unicode"
+    stream.Open
+    stream.LoadFromFile filePath
+    ReadUnicodeTextFile = stream.ReadText(-1)
+    stream.Close
+End Function
+
+' 一時ファイルパスを作成
+Private Function TemporaryFilePath(ByVal prefixText As String, ByVal extensionText As String) As String
+    Dim fso As Object
+    Dim tempName As String
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    tempName = Replace(fso.GetTempName(), ".", "_")
+    TemporaryFilePath = fso.BuildPath(Environ$("TEMP"), prefixText & tempName & extensionText)
+End Function
+
+' コマンドライン引数を引用符で囲む
+Private Function QuoteCommandArgument(ByVal value As String) As String
+    QuoteCommandArgument = """" & Replace(value, """", """""") & """"
+End Function
+
+' ファイルが存在するか判定
+Private Function FileExists(ByVal filePath As String) As Boolean
+    If Len(filePath) = 0 Then Exit Function
+    FileExists = (Len(Dir$(filePath, vbNormal)) > 0)
+End Function
+
+' ファイルがあれば削除
+Private Sub DeleteFileIfExists(ByVal filePath As String)
+    If Len(filePath) = 0 Then Exit Sub
+    On Error Resume Next
+    Kill filePath
+    On Error GoTo 0
+End Sub
 
 ' 括弧内のSELECT/WITHをサブクエリとして収集
 Private Sub CollectSubqueryBlocks(ByVal queryText As String, ByVal blocks As Collection)
@@ -926,6 +1072,11 @@ End Function
 ' アウトプットシートのフォントサイズを取得
 Private Function OutputFontSize() As Long
     OutputFontSize = 9
+End Function
+
+' parser出力のブロック区切り文字を取得
+Private Function OutputBlockSeparator() As String
+    OutputBlockSeparator = ChrW$(&H1E)
 End Function
 
 ' 所属テーブルID見出しを取得
