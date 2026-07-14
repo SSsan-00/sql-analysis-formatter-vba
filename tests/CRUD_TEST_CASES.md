@@ -1045,9 +1045,634 @@ where
 | 2 | orders.注文ユーザーID |
 | 3 | orders.金額 |
 
+## 追加T-SQL出力ケース
+
+以下はA5M2 `Ctrl+Q` の実整形を使用した追加ケースです。
+確定した期待値は出力期待値ブックへ登録し、手動作成対象は各ケースに明記します。
+
+### SEL-027 JOINのON条件が複数あるケース
+
+入力:
+
+```sql
+select
+    tb1.user_id
+    , tb1.name
+    , tb2.order_id
+    , tb2.amount
+from
+    users as tb1
+    left join orders as tb2
+        on tb1.user_id = tb2.user_id
+        and tb2.status = @status
+```
+
+変換定義:
+
+| 所属テーブルID | 所属テーブル和名 | カラム名 | カラム和名 |
+| --- | --- | --- | --- |
+| tb1 | ユーザー | user_id | ユーザーID |
+| tb1 | ユーザー | name | 氏名 |
+| tb2 | 注文 | order_id | 注文ID |
+| tb2 | 注文 | amount | 金額 |
+| tb2 | 注文 | user_id | 注文ユーザーID |
+| tb2 | 注文 | status | 状態 |
+
+期待値:
+
+- 参照テーブル: `ユーザー[tb1]`、`注文[tb2]`
+- 取得項目: `tb1.ユーザーID`、`tb1.氏名`、`tb2.注文ID`、`tb2.金額`
+- 結合: `＜ユーザー[tb1] LEFT JOIN 注文[tb2]＞`
+- 結合条件1: `tb1.ユーザーID = tb2.注文ユーザーID`
+- 結合条件2: `AND tb2.状態 = @status`
+
+### SEL-028 NEXT VALUE FOR
+
+入力:
+
+```sql
+select
+    next value for dbo.order_sequence as next_order_id
+```
+
+変換定義は使用しません。
+
+期待値:
+
+- 参照テーブル: `なし`
+- 取得項目: `next_order_id`
+- 補足: `NEXT VALUE FOR dbo.order_sequence`
+
+### SEL-029 current_value
+
+入力:
+
+```sql
+select
+    seq.current_value
+from
+    sys.sequences as seq
+where
+    seq.name = 'order_sequence'
+```
+
+変換定義:
+
+| 所属テーブルID | 所属テーブル和名 | カラム名 | カラム和名 |
+| --- | --- | --- | --- |
+| seq | シーケンス | current_value | 現在値 |
+| seq | シーケンス | name | シーケンス名 |
+
+期待値:
+
+- 参照テーブル: `シーケンス[seq]`
+- 取得項目: `seq.現在値`
+- 検索条件: `seq.シーケンス名 = 'order_sequence'`
+
+### SEL-030 OFFSET / FETCH
+
+入力:
+
+```sql
+select
+    tb1.user_id
+    , tb1.name
+from
+    users as tb1
+order by
+    tb1.user_id offset 10 rows fetch next 20 rows only
+```
+
+期待値:
+
+- 参照テーブル: `ユーザー[tb1]`
+- 取得範囲: `OFFSET 10 ROWS FETCH NEXT 20 ROWS ONLY`（取得項目より上の行へ配置し、値はG列から記載）
+- 取得項目: `tb1.ユーザーID`、`tb1.氏名`
+- 並び順: `tb1.ユーザーID`
+
+### SEL-031 TOP
+
+入力:
+
+```sql
+select
+    top(10) tb1.user_id
+    , tb1.name
+from
+    users as tb1
+order by
+    tb1.user_id
+```
+
+期待値:
+
+- 参照テーブル: `ユーザー[tb1]`
+- 取得件数: `10`（取得項目より上の行へ配置し、値はG列から記載）
+- 取得項目: `tb1.ユーザーID`、`tb1.氏名`
+- 並び順: `tb1.ユーザーID`
+
+### SEL-032 LIKE
+
+入力:
+
+```sql
+select
+    tb1.user_id
+    , tb1.name
+from
+    users as tb1
+where
+    tb1.name like @name + '%'
+```
+
+期待値:
+
+- 参照テーブル: `ユーザー[tb1]`
+- 取得項目: `tb1.ユーザーID`、`tb1.氏名`
+- 検索条件: `tb1.氏名 LIKE @name + '%'`
+
+### SEL-033 UPPER
+
+入力:
+
+```sql
+select
+    tb1.user_id
+    , upper(tb1.name) as upper_name
+from
+    users as tb1
+```
+
+期待値:
+
+- 参照テーブル: `ユーザー[tb1]`
+- 取得項目: `tb1.ユーザーID`
+- 取得項目: `upper_name`
+- 補足: `UPPER(tb1.氏名)`
+
+### SEL-034 LOWER
+
+入力:
+
+```sql
+select
+    tb1.user_id
+    , lower(tb1.name) as lower_name
+from
+    users as tb1
+```
+
+期待値:
+
+- 参照テーブル: `ユーザー[tb1]`
+- 取得項目: `tb1.ユーザーID`
+- 取得項目: `lower_name`
+- 補足: `LOWER(tb1.氏名)`
+
+### SEL-035 CHARINDEX
+
+入力:
+
+```sql
+select
+    tb1.user_id
+    , charindex('@', tb1.email) as at_position
+from
+    users as tb1
+```
+
+期待値:
+
+- 参照テーブル: `ユーザー[tb1]`
+- 取得項目: `tb1.ユーザーID`
+- 取得項目: `at_position`
+- 補足: `CHARINDEX('@', tb1.メール)`
+
+### SEL-036 COLLATE Japanese_BIN
+
+入力:
+
+```sql
+select
+    tb1.user_id
+    , tb1.name
+from
+    users as tb1
+where
+    tb1.name collate Japanese_BIN = @name
+```
+
+期待値:
+
+- 参照テーブル: `ユーザー[tb1]`
+- 取得項目: `tb1.ユーザーID`、`tb1.氏名`
+- 検索条件: `tb1.氏名 COLLATE Japanese_BIN = @name`
+
+`COLLATE`は大文字へ統一し、照合順序名 `Japanese_BIN` は変更しません。
+
+### SEL-037 ORDER BY COLLATE Japanese_BIN
+
+入力:
+
+```sql
+select
+    tb1.user_id
+    , tb1.name
+from
+    users as tb1
+order by
+    tb1.name collate Japanese_BIN
+```
+
+期待値:
+
+- 参照テーブル: `ユーザー[tb1]`
+- 取得項目: `tb1.ユーザーID`、`tb1.氏名`
+- 並び順: `tb1.氏名 COLLATE Japanese_BIN`
+
+`COLLATE`は大文字へ統一し、照合順序名 `Japanese_BIN` は変更しません。
+昇順は既定値のため出力しません。
+
+### SEL-038 GROUP BY
+
+入力:
+
+```sql
+select
+    tb1.status
+    , count(tb1.user_id) as user_count
+from
+    users as tb1
+group by
+    tb1.status
+```
+
+変換定義:
+
+| 所属テーブルID | 所属テーブル和名 | カラム名 | カラム和名 |
+| --- | --- | --- | --- |
+| tb1 | ユーザー | status | 状態 |
+| tb1 | ユーザー | user_id | ユーザーID |
+
+期待値:
+
+- 参照テーブル: `ユーザー[tb1]`
+- 取得項目1: `tb1.状態`
+- 取得項目2: `user_count`（補足: `COUNT(tb1.ユーザーID)`）
+- グループキー1: `tb1.状態`
+
+以下の未確定ケースは `tests/ManualOutputCases.json` にA5M2の行末空白を含めて保存しています。
+開発用ブックへの切り替えには次のコマンドを使用します。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\Set-ManualOutputCase.ps1 -CaseId SEL-039
+```
+
+### SEL-039 HAVING
+
+入力:
+
+```sql
+select
+    tb1.status
+    , count(tb1.user_id) as user_count
+from
+    users as tb1
+group by
+    tb1.status
+having
+    count(tb1.user_id) >= 10
+```
+
+変換定義:
+
+| 所属テーブルID | 所属テーブル和名 | カラム名 | カラム和名 |
+| --- | --- | --- | --- |
+| tb1 | ユーザー | status | 状態 |
+| tb1 | ユーザー | user_id | ユーザーID |
+
+期待値:
+
+- 参照テーブル: `ユーザー[tb1]`
+- 取得項目1: `tb1.状態`
+- 取得項目2: `user_count`（補足: `COUNT(tb1.ユーザーID)`）
+- グループキー1: `tb1.状態`
+- 集計条件: `COUNT(tb1.ユーザーID) >= 10`
+
+### SEL-040 CASE WHEN ELSE
+
+入力:
+
+```sql
+select
+    tb1.user_id
+    , case
+        when tb1.status = 'ACTIVE'
+            then '有効'
+        else '無効'
+        end as status_name
+from
+    users as tb1
+```
+
+変換定義:
+
+| 所属テーブルID | 所属テーブル和名 | カラム名 | カラム和名 |
+| --- | --- | --- | --- |
+| tb1 | ユーザー | user_id | ユーザーID |
+| tb1 | ユーザー | status | 状態 |
+
+期待値:
+
+- 参照テーブル: `ユーザー[tb1]`
+- 取得項目1: `tb1.ユーザーID`
+- 取得項目2: `status_name`
+- CASE分岐1: `tb1.状態 = 'ACTIVE' → '有効'`
+- CASE分岐2: `それ以外 → '無効'`
+
+### SEL-041 複雑な括弧条件
+
+入力:
+
+```sql
+select
+    tb1.user_id
+    , tb1.name
+from
+    users as tb1
+where
+    (
+        tb1.status = @status
+        and (tb1.name like @name + '%' or tb1.email = @email)
+    )
+    and not (
+        tb1.deleted_at is not null
+        or tb1.user_id in (@excluded_user_id1, @excluded_user_id2)
+    )
+```
+
+変換定義:
+
+| 所属テーブルID | 所属テーブル和名 | カラム名 | カラム和名 |
+| --- | --- | --- | --- |
+| tb1 | ユーザー | user_id | ユーザーID |
+| tb1 | ユーザー | name | 氏名 |
+| tb1 | ユーザー | status | 状態 |
+| tb1 | ユーザー | email | メール |
+| tb1 | ユーザー | deleted_at | 削除日時 |
+
+期待値:
+
+- 参照テーブル: `ユーザー[tb1]`
+- 取得項目: `tb1.ユーザーID`、`tb1.氏名`
+- 検索条件: `(tb1.状態 = @status AND (tb1.氏名 LIKE @name + '%' OR tb1.メール = @email)) AND NOT (tb1.削除日時 IS NOT NULL OR tb1.ユーザーID IN (@excluded_user_id1, @excluded_user_id2))`
+
+括弧、`AND`、`OR`、`NOT`は検索条件ブロック内の別セルへ配置し、元SQLの評価順序を維持します。
+
+### SEL-042 サブクエリ
+
+入力:
+
+```sql
+select
+    tb1.user_id
+    , tb1.name
+from
+    users as tb1
+where
+    tb1.user_id in (
+        select
+            tb2.user_id
+        from
+            orders as tb2
+        where
+            tb2.status = @status
+    )
+```
+
+変換定義:
+
+| 所属テーブルID | 所属テーブル和名 | カラム名 | カラム和名 |
+| --- | --- | --- | --- |
+| tb1 | ユーザー | user_id | ユーザーID |
+| tb1 | ユーザー | name | 氏名 |
+| tb2 | 注文 | user_id | 注文ユーザーID |
+| tb2 | 注文 | status | 状態 |
+
+期待値:
+
+- 出力順序: `サブクエリ[SQ1]`、`＜DB入出力項目定義＞`
+- SQ1参照テーブル: `注文[tb2]`
+- SQ1取得項目: `tb2.注文ユーザーID`
+- SQ1検索条件: `tb2.状態 = @status`
+- 全体参照テーブル: `ユーザー[tb1]`、`SQ1`
+- 全体取得項目: `tb1.ユーザーID`、`tb1.氏名`
+- 全体検索条件: `tb1.ユーザーID IN (SQ1)`
+
+### SEL-043 WITH
+
+入力:
+
+```sql
+with target_users as (
+    select
+        tb1.user_id
+        , tb1.name
+    from
+        users as tb1
+    where
+        tb1.status = @status
+)
+select
+    target_users.user_id
+    , target_users.name
+from
+    target_users
+```
+
+変換定義:
+
+| 所属テーブルID | 所属テーブル和名 | カラム名 | カラム和名 |
+| --- | --- | --- | --- |
+| tb1 | ユーザー | user_id | ユーザーID |
+| tb1 | ユーザー | name | 氏名 |
+| tb1 | ユーザー | status | 状態 |
+| target_users | (和名未取得) | user_id | ユーザーID |
+| target_users | (和名未取得) | name | 氏名 |
+
+期待値:
+
+- 出力順序: `サブクエリ[target_users]`、`＜DB入出力項目定義＞`
+- WITH内参照テーブル: `ユーザー[tb1]`
+- WITH内取得項目: `tb1.ユーザーID`、`tb1.氏名`
+- WITH内検索条件: `tb1.状態 = @status`
+- 全体参照テーブル: `(和名未取得)[target_users]`
+- 全体取得項目: `target_users.ユーザーID`、`target_users.氏名`
+
+CTE名に対応する実テーブル和名は存在しないため、所属テーブル和名を `(和名未取得)` とします。
+
+### SEL-044 UNION
+
+入力:
+
+```sql
+select
+    tb1.user_id
+    , tb1.name
+from
+    users as tb1
+where
+    tb1.status = 'ACTIVE'
+union
+select
+    tb2.user_id
+    , tb2.name
+from
+    archived_users as tb2
+where
+    tb2.status = 'ACTIVE'
+```
+
+変換定義:
+
+| 所属テーブルID | 所属テーブル和名 | カラム名 | カラム和名 |
+| --- | --- | --- | --- |
+| tb1 | ユーザー | user_id | ユーザーID |
+| tb1 | ユーザー | name | 氏名 |
+| tb1 | ユーザー | status | 状態 |
+| tb2 | 退会ユーザー | user_id | ユーザーID |
+| tb2 | 退会ユーザー | name | 氏名 |
+| tb2 | 退会ユーザー | status | 状態 |
+
+期待値:
+
+- 参照テーブル: `ユーザー[tb1]`、`退会ユーザー[tb2]`
+- 前半取得項目: `tb1.ユーザーID`、`tb1.氏名`
+- 前半検索条件: `tb1.状態 = 'ACTIVE'`
+- UNION境界: `＜UNION＞`
+- 後半取得項目: `tb2.ユーザーID`、`tb2.氏名`
+- 後半検索条件: `tb2.状態 = 'ACTIVE'`
+
+### SEL-045 INSERT SELECT
+
+入力:
+
+```sql
+insert
+into user_archive(user_id, name, status)
+select
+    tb1.user_id
+    , tb1.name
+    , tb1.status
+from
+    users as tb1
+where
+    tb1.deleted_at < @archive_before
+```
+
+変換定義:
+
+| 所属テーブルID | 所属テーブル和名 | カラム名 | カラム和名 |
+| --- | --- | --- | --- |
+| user_archive | ユーザーアーカイブ | user_id | ユーザーID |
+| user_archive | ユーザーアーカイブ | name | 氏名 |
+| user_archive | ユーザーアーカイブ | status | 状態 |
+| - | ユーザーアーカイブ | user_id | ユーザーID |
+| - | ユーザーアーカイブ | name | 氏名 |
+| - | ユーザーアーカイブ | status | 状態 |
+| tb1 | ユーザー | user_id | ユーザーID |
+| tb1 | ユーザー | name | 氏名 |
+| tb1 | ユーザー | status | 状態 |
+| tb1 | ユーザー | deleted_at | 削除日時 |
+
+`user_archive` は移送先テーブル名、`-` は修飾されないINSERT列を変換するための定義です。
+
+期待値:
+
+- タイトル: `＜データ移送表＞`
+- 参照テーブル: `ユーザーアーカイブ`、`ユーザー[tb1]`
+- 表見出し: `項目`、`移送元`、`移送方法ほか`
+- 移送対応: `ユーザーID ← tb1.ユーザーID`
+- 移送対応: `氏名 ← tb1.氏名`
+- 移送対応: `状態 ← tb1.状態`
+- 移送方法ほか: 空欄
+- 検索条件: `tb1.削除日時 < @archive_before`
+
+### SEL-046 DELETE
+
+入力:
+
+```sql
+delete tb1
+from
+    users as tb1
+where
+    tb1.deleted_at < @delete_before
+    and tb1.status = 'INACTIVE'
+```
+
+変換定義:
+
+| 所属テーブルID | 所属テーブル和名 | カラム名 | カラム和名 |
+| --- | --- | --- | --- |
+| tb1 | ユーザー | deleted_at | 削除日時 |
+| tb1 | ユーザー | status | 状態 |
+
+期待値:
+
+- タイトル: `＜データ移送表＞`
+- 参照テーブル: `ユーザー[tb1]`
+- 検索条件1: `tb1.削除日時 < @delete_before`
+- 論理演算子: `AND`
+- 検索条件2: `tb1.状態 = 'INACTIVE'`
+- DELETEでは移送項目を出力しない
+
+### SEL-047 UPDATE FROM
+
+入力:
+
+```sql
+update tb1
+set
+    status = @status
+    , updated_at = sysdatetime()
+from
+    users as tb1
+    inner join orders as tb2
+        on tb1.user_id = tb2.user_id
+where
+    tb2.status = @order_status
+```
+
+変換定義:
+
+| 所属テーブルID | 所属テーブル和名 | カラム名 | カラム和名 |
+| --- | --- | --- | --- |
+| - | ユーザー | status | 状態 |
+| - | ユーザー | updated_at | 更新日時 |
+| tb1 | ユーザー | user_id | ユーザーID |
+| tb2 | 注文 | user_id | 注文ユーザーID |
+| tb2 | 注文 | status | 状態 |
+
+期待値:
+
+- タイトル: `＜データ移送表＞`
+- 参照テーブル: `ユーザー[tb1]`、`注文[tb2]`
+- 表見出し: `項目`、`移送元`、`移送方法ほか`
+- 移送対応: `状態 ← @status`
+- 移送対応: `更新日時 ← sysdatetime()`
+- 移送方法ほか: 空欄
+- 結合対象: `＜ユーザー[tb1] INNER JOIN 注文[tb2]＞`
+- 結合条件: `tb1.ユーザーID = tb2.注文ユーザーID`
+- 検索条件: `tb2.状態 = @order_status`
+
 ## 出力シート
 
 整形出力先シート名は `アウトプット` です。
 現時点では暫定形式として、A列へ和名変換後クエリをもとにしたクエリブロックを出力します。
 WITH句やサブクエリを含む場合は、内側のサブクエリ、外側のサブクエリ、解析対象のクエリ全体の順で出力します。
 未対応のクエリは分解せず、そのまま1ブロックとして出力します。
+
+## ユーザーによる期待値作成が必要なケース
+
+現在、ユーザーによる期待値作成待ちのケースはありません。

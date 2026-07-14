@@ -1,0 +1,224 @@
+{
+  "dialect": "T-SQL",
+  "formatter": {
+    "name": "A5:SQL Mk-2",
+    "version": "2.21.1",
+    "command": "Ctrl+Q"
+  },
+  "cases": [
+    {
+      "id": "SEL-039",
+      "title": "HAVING",
+      "sql_lines": [
+        "select",
+        "    tb1.status",
+        "    , count(tb1.user_id) as user_count ",
+        "from",
+        "    users as tb1 ",
+        "group by",
+        "    tb1.status ",
+        "having",
+        "    count(tb1.user_id) >= 10"
+      ],
+      "definitions": [
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "status", "field_name_ja": "状態" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "user_id", "field_name_ja": "ユーザーID" }
+      ]
+    },
+    {
+      "id": "SEL-040",
+      "title": "CASE WHEN ELSE",
+      "sql_lines": [
+        "select",
+        "    tb1.user_id",
+        "    , case ",
+        "        when tb1.status = 'ACTIVE' ",
+        "            then '有効' ",
+        "        else '無効' ",
+        "        end as status_name ",
+        "from",
+        "    users as tb1"
+      ],
+      "definitions": [
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "user_id", "field_name_ja": "ユーザーID" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "status", "field_name_ja": "状態" }
+      ]
+    },
+    {
+      "id": "SEL-041",
+      "title": "複雑な括弧条件",
+      "sql_lines": [
+        "select",
+        "    tb1.user_id",
+        "    , tb1.name ",
+        "from",
+        "    users as tb1 ",
+        "where",
+        "    ( ",
+        "        tb1.status = @status ",
+        "        and (tb1.name like @name + '%' or tb1.email = @email)",
+        "    ) ",
+        "    and not ( ",
+        "        tb1.deleted_at is not null ",
+        "        or tb1.user_id in (@excluded_user_id1, @excluded_user_id2)",
+        "    )"
+      ],
+      "definitions": [
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "user_id", "field_name_ja": "ユーザーID" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "name", "field_name_ja": "氏名" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "status", "field_name_ja": "状態" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "email", "field_name_ja": "メール" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "deleted_at", "field_name_ja": "削除日時" }
+      ]
+    },
+    {
+      "id": "SEL-042",
+      "title": "サブクエリ",
+      "sql_lines": [
+        "select",
+        "    tb1.user_id",
+        "    , tb1.name ",
+        "from",
+        "    users as tb1 ",
+        "where",
+        "    tb1.user_id in ( ",
+        "        select",
+        "            tb2.user_id ",
+        "        from",
+        "            orders as tb2 ",
+        "        where",
+        "            tb2.status = @status",
+        "    )"
+      ],
+      "definitions": [
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "user_id", "field_name_ja": "ユーザーID" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "name", "field_name_ja": "氏名" },
+        { "table_id": "tb2", "table_name_ja": "注文", "field_id": "user_id", "field_name_ja": "注文ユーザーID" },
+        { "table_id": "tb2", "table_name_ja": "注文", "field_id": "status", "field_name_ja": "状態" }
+      ]
+    },
+    {
+      "id": "SEL-043",
+      "title": "WITH",
+      "sql_lines": [
+        "with target_users as ( ",
+        "    select",
+        "        tb1.user_id",
+        "        , tb1.name ",
+        "    from",
+        "        users as tb1 ",
+        "    where",
+        "        tb1.status = @status",
+        ") ",
+        "select",
+        "    target_users.user_id",
+        "    , target_users.name ",
+        "from",
+        "    target_users"
+      ],
+      "definitions": [
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "user_id", "field_name_ja": "ユーザーID" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "name", "field_name_ja": "氏名" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "status", "field_name_ja": "状態" },
+        { "table_id": "target_users", "table_name_ja": "(和名未取得)", "field_id": "user_id", "field_name_ja": "ユーザーID" },
+        { "table_id": "target_users", "table_name_ja": "(和名未取得)", "field_id": "name", "field_name_ja": "氏名" }
+      ]
+    },
+    {
+      "id": "SEL-044",
+      "title": "UNION",
+      "sql_lines": [
+        "select",
+        "    tb1.user_id",
+        "    , tb1.name ",
+        "from",
+        "    users as tb1 ",
+        "where",
+        "    tb1.status = 'ACTIVE' ",
+        "union ",
+        "select",
+        "    tb2.user_id",
+        "    , tb2.name ",
+        "from",
+        "    archived_users as tb2 ",
+        "where",
+        "    tb2.status = 'ACTIVE'"
+      ],
+      "definitions": [
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "user_id", "field_name_ja": "ユーザーID" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "name", "field_name_ja": "氏名" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "status", "field_name_ja": "状態" },
+        { "table_id": "tb2", "table_name_ja": "退会ユーザー", "field_id": "user_id", "field_name_ja": "ユーザーID" },
+        { "table_id": "tb2", "table_name_ja": "退会ユーザー", "field_id": "name", "field_name_ja": "氏名" },
+        { "table_id": "tb2", "table_name_ja": "退会ユーザー", "field_id": "status", "field_name_ja": "状態" }
+      ]
+    },
+    {
+      "id": "SEL-045",
+      "title": "INSERT SELECT",
+      "sql_lines": [
+        "insert ",
+        "into user_archive(user_id, name, status) ",
+        "select",
+        "    tb1.user_id",
+        "    , tb1.name",
+        "    , tb1.status ",
+        "from",
+        "    users as tb1 ",
+        "where",
+        "    tb1.deleted_at < @archive_before"
+      ],
+      "definitions": [
+        { "table_id": "user_archive", "table_name_ja": "ユーザーアーカイブ", "field_id": "user_id", "field_name_ja": "ユーザーID" },
+        { "table_id": "user_archive", "table_name_ja": "ユーザーアーカイブ", "field_id": "name", "field_name_ja": "氏名" },
+        { "table_id": "user_archive", "table_name_ja": "ユーザーアーカイブ", "field_id": "status", "field_name_ja": "状態" },
+        { "table_id": "-", "table_name_ja": "ユーザーアーカイブ", "field_id": "user_id", "field_name_ja": "ユーザーID" },
+        { "table_id": "-", "table_name_ja": "ユーザーアーカイブ", "field_id": "name", "field_name_ja": "氏名" },
+        { "table_id": "-", "table_name_ja": "ユーザーアーカイブ", "field_id": "status", "field_name_ja": "状態" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "user_id", "field_name_ja": "ユーザーID" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "name", "field_name_ja": "氏名" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "status", "field_name_ja": "状態" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "deleted_at", "field_name_ja": "削除日時" }
+      ]
+    },
+    {
+      "id": "SEL-046",
+      "title": "DELETE",
+      "sql_lines": [
+        "delete tb1 ",
+        "from",
+        "    users as tb1 ",
+        "where",
+        "    tb1.deleted_at < @delete_before ",
+        "    and tb1.status = 'INACTIVE'"
+      ],
+      "definitions": [
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "deleted_at", "field_name_ja": "削除日時" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "status", "field_name_ja": "状態" }
+      ]
+    },
+    {
+      "id": "SEL-047",
+      "title": "UPDATE FROM",
+      "sql_lines": [
+        "update tb1 ",
+        "set",
+        "    status = @status",
+        "    , updated_at = sysdatetime() ",
+        "from",
+        "    users as tb1 ",
+        "    inner join orders as tb2 ",
+        "        on tb1.user_id = tb2.user_id ",
+        "where",
+        "    tb2.status = @order_status"
+      ],
+      "definitions": [
+        { "table_id": "-", "table_name_ja": "ユーザー", "field_id": "status", "field_name_ja": "状態" },
+        { "table_id": "-", "table_name_ja": "ユーザー", "field_id": "updated_at", "field_name_ja": "更新日時" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "user_id", "field_name_ja": "ユーザーID" },
+        { "table_id": "tb2", "table_name_ja": "注文", "field_id": "user_id", "field_name_ja": "注文ユーザーID" },
+        { "table_id": "tb2", "table_name_ja": "注文", "field_id": "status", "field_name_ja": "状態" }
+      ]
+    }
+  ]
+}
