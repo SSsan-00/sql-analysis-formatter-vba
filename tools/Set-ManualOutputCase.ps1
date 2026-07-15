@@ -56,6 +56,8 @@ try {
     $outputSheet = $workbook.Worksheets.Item('アウトプット')
 
     $sqlSheet.Range('A2:CL1000').ClearContents() | Out-Null
+    # 数値だけのSQL行もA5M2の空白を含む文字列として保持する。
+    $sqlSheet.Range('A2:A1000').NumberFormat = '@'
     for ($index = 0; $index -lt $targetCase.sql_lines.Count; $index++) {
         # A5M2が付与した行末空白も入力データとして保持する。
         $sqlSheet.Cells.Item($index + 2, 1).Value2 = [string]$targetCase.sql_lines[$index]
