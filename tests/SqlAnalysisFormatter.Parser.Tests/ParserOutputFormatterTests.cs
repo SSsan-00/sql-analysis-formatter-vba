@@ -8,6 +8,9 @@ namespace SqlAnalysisFormatter.Parser.Tests;
 [TestClass]
 public sealed class ParserOutputFormatterTests
 {
+    /// <summary>
+    /// 複数ブロックをレコード区切りで連結することを確認
+    /// </summary>
     [TestMethod]
     public void ToVbaBlocks_JoinsBlocksWithRecordSeparator()
     {
@@ -25,6 +28,9 @@ public sealed class ParserOutputFormatterTests
         Assert.AreEqual($"select 1{ParserOutputFormatter.VbaBlockSeparator}select * from users", formatted);
     }
 
+    /// <summary>
+    /// 解析失敗時もフォールバックブロックを維持することを確認
+    /// </summary>
     [TestMethod]
     public void ToVbaBlocks_KeepsFallbackBlockWhenParseFails()
     {

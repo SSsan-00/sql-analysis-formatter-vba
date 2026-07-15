@@ -8,6 +8,9 @@ namespace SqlAnalysisFormatter.Parser.Tests;
 [TestClass]
 public sealed class OutputSheetPlanBuilderTests
 {
+    /// <summary>
+    /// 単純SELECTを基本フレームへ変換できることを確認
+    /// </summary>
     [TestMethod]
     public void Build_CreatesSimpleSelectFrame()
     {
@@ -47,6 +50,9 @@ public sealed class OutputSheetPlanBuilderTests
             plan.Sections.ToArray());
     }
 
+    /// <summary>
+    /// SELECT各句を期待する行順で出力することを確認
+    /// </summary>
     [TestMethod]
     public void Build_CreatesSelectClausesInOutputOrder()
     {
@@ -103,6 +109,52 @@ public sealed class OutputSheetPlanBuilderTests
             (9, 17, "tb1.状態(降順)"));
     }
 
+    /// <summary>
+    /// OFFSETとFETCHを取得項目より先に出力することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_WritesOffsetFetchBeforeSelectItems()
+    {
+        const string sql = """
+            SELECT
+                tb1.ユーザーID
+                , tb1.氏名
+            FROM
+                users AS tb1
+            ORDER BY
+                tb1.ユーザーID
+            OFFSET 10 ROWS FETCH NEXT 20 ROWS ONLY
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "ユーザー", "user_id", "ユーザーID")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.AreEqual(6, plan.RowCount);
+        AssertCells(
+            plan,
+            (1, 1, "＜DB入出力項目定義＞"),
+            (2, 1, "参照テーブル: ユーザー[tb1]"),
+            (3, 1, "取得範囲"),
+            (3, 7, "OFFSET 10 ROWS FETCH NEXT 20 ROWS ONLY"),
+            (4, 1, "取得項目"),
+            (4, 7, "取得項目1"),
+            (4, 15, ":"),
+            (4, 17, "tb1.ユーザーID"),
+            (5, 7, "取得項目2"),
+            (5, 15, ":"),
+            (5, 17, "tb1.氏名"),
+            (6, 1, "並び順"),
+            (6, 7, "ソートキー1"),
+            (6, 15, ":"),
+            (6, 17, "tb1.ユーザーID"));
+    }
+
+    /// <summary>
+    /// 複数ON条件を持つJOINフレームを作成できることを確認
+    /// </summary>
     [TestMethod]
     public void Build_CreatesJoinFrameWithMultipleConditions()
     {
@@ -152,6 +204,9 @@ public sealed class OutputSheetPlanBuilderTests
             (9, 17, "tb2.状態 = @status"));
     }
 
+    /// <summary>
+    /// CASE分岐を列エイリアスの下へ展開することを確認
+    /// </summary>
     [TestMethod]
     public void Build_ExpandsCaseBranchesBelowAliasedItem()
     {
@@ -190,6 +245,9 @@ public sealed class OutputSheetPlanBuilderTests
             (5, 32, "それ以外 → '無効'"));
     }
 
+    /// <summary>
+    /// 複雑条件の外側括弧だけを独立行へ展開することを確認
+    /// </summary>
     [TestMethod]
     public void Build_ExpandsOnlyOuterConditionParentheses()
     {
@@ -242,6 +300,9 @@ public sealed class OutputSheetPlanBuilderTests
             (10, 7, ")"));
     }
 
+    /// <summary>
+    /// 無名サブクエリを全体クエリより先に出力することを確認
+    /// </summary>
     [TestMethod]
     public void Build_WritesUnnamedSubqueryBeforeWholeQuery()
     {
@@ -293,6 +354,9 @@ public sealed class OutputSheetPlanBuilderTests
             (10, 17, "tb1.ユーザーID IN (SQ1)"));
     }
 
+    /// <summary>
+    /// CTE名を使ったサブクエリフレームを先に出力することを確認
+    /// </summary>
     [TestMethod]
     public void Build_WritesCteBeforeWholeQueryUsingItsName()
     {
@@ -345,6 +409,9 @@ public sealed class OutputSheetPlanBuilderTests
             (10, 17, "target_users.氏名"));
     }
 
+    /// <summary>
+    /// UNIONの各枝を1フレームへ出力することを確認
+    /// </summary>
     [TestMethod]
     public void Build_WritesUnionBranchesInOneFrame()
     {
@@ -399,6 +466,9 @@ public sealed class OutputSheetPlanBuilderTests
             (9, 17, "tb2.状態 = 'ACTIVE'"));
     }
 
+    /// <summary>
+    /// INSERT SELECTをデータ移送表へ変換することを確認
+    /// </summary>
     [TestMethod]
     public void Build_CreatesInsertSelectTransferFrame()
     {
@@ -439,6 +509,9 @@ public sealed class OutputSheetPlanBuilderTests
             (7, 17, "tb1.削除日時 < @archive_before"));
     }
 
+    /// <summary>
+    /// DELETEを移送行なしの条件表へ変換することを確認
+    /// </summary>
     [TestMethod]
     public void Build_CreatesDeleteConditionFrameWithoutTransferRows()
     {
@@ -468,6 +541,9 @@ public sealed class OutputSheetPlanBuilderTests
             (4, 17, "tb1.状態 = 'INACTIVE'"));
     }
 
+    /// <summary>
+    /// UPDATE FROMを移送・結合・条件表へ変換することを確認
+    /// </summary>
     [TestMethod]
     public void Build_CreatesUpdateFromTransferAndJoinFrame()
     {

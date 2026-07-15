@@ -37,6 +37,9 @@ public static class OutputSheetPlanBuilder
         };
     }
 
+    /// <summary>
+    /// SELECTのサブクエリと全体クエリを出力順に構成
+    /// </summary>
     private static OutputSheetPlan BuildSelectStatement(
         string sql,
         SelectStatement selectStatement,
@@ -68,6 +71,9 @@ public static class OutputSheetPlanBuilder
         return CombinePlans(plans);
     }
 
+    /// <summary>
+    /// INSERT SELECTをデータ移送表へ変換
+    /// </summary>
     private static OutputSheetPlan BuildInsert(
         string sql,
         InsertStatement statement,
@@ -103,6 +109,9 @@ public static class OutputSheetPlanBuilder
             mappings);
     }
 
+    /// <summary>
+    /// DELETEの参照テーブルと条件をデータ移送表へ変換
+    /// </summary>
     private static OutputSheetPlan BuildDelete(
         string sql,
         DeleteStatement statement,
@@ -124,6 +133,9 @@ public static class OutputSheetPlanBuilder
             mappings);
     }
 
+    /// <summary>
+    /// UPDATEのSET、JOIN、WHEREをデータ移送表へ変換
+    /// </summary>
     private static OutputSheetPlan BuildUpdate(
         string sql,
         UpdateStatement statement,
@@ -152,6 +164,9 @@ public static class OutputSheetPlanBuilder
             mappings);
     }
 
+    /// <summary>
+    /// 更新系に共通するデータ移送表を構成
+    /// </summary>
     private static OutputSheetPlan BuildDataTransferPlan(
         string sql,
         string references,
@@ -196,6 +211,9 @@ public static class OutputSheetPlanBuilder
         return new OutputSheetPlan(cells, sections, row - 1, false);
     }
 
+    /// <summary>
+    /// 更新対象テーブルの和名表示を作成
+    /// </summary>
     private static string BuildTargetTableDisplay(
         TableReference target,
         IReadOnlyList<MappingDefinition> mappings,
@@ -211,6 +229,9 @@ public static class OutputSheetPlanBuilder
         return includeIdentifier ? $"{tableName}[{tableId}]" : tableName;
     }
 
+    /// <summary>
+    /// クエリ式の具象型に応じた描画計画を作成
+    /// </summary>
     private static OutputSheetPlan BuildQueryExpression(
         string sql,
         QueryExpression expression,
@@ -227,6 +248,9 @@ public static class OutputSheetPlanBuilder
         };
     }
 
+    /// <summary>
+    /// UNIONなどの複合クエリを1フレームへ変換
+    /// </summary>
     private static OutputSheetPlan BuildBinaryQuery(
         string sql,
         BinaryQueryExpression binary,
@@ -243,8 +267,7 @@ public static class OutputSheetPlanBuilder
         }
 
         var tableDisplays = branches
-            .SelectMany(branch => BuildTableList(branch, mappings, []).Split('、'))
-            .Where(value => value != "なし" && value.Length > 0)
+            .SelectMany(branch => BuildTableDisplays(branch.FromClause, mappings, []))
             .Concat(additionalTables)
             .Distinct(StringComparer.OrdinalIgnoreCase);
         var cells = new List<OutputCell>
@@ -285,6 +308,9 @@ public static class OutputSheetPlanBuilder
         return new OutputSheetPlan(cells, sections, row - 1, false);
     }
 
+    /// <summary>
+    /// 複合クエリを左から分岐と演算子へ分解
+    /// </summary>
     private static void AddBinaryBranches(
         QueryExpression expression,
         ICollection<QuerySpecification> branches,
@@ -305,6 +331,9 @@ public static class OutputSheetPlanBuilder
         }
     }
 
+    /// <summary>
+    /// 複合クエリ演算子の表示文字列を取得
+    /// </summary>
     private static string BinaryOperatorText(BinaryQueryExpression binary)
     {
         var operation = binary.BinaryQueryExpressionType switch
@@ -316,6 +345,9 @@ public static class OutputSheetPlanBuilder
         return binary.All ? operation + " ALL" : operation;
     }
 
+    /// <summary>
+    /// 親クエリから直接参照されるサブクエリだけを取得
+    /// </summary>
     private static IReadOnlyList<SubqueryInfo> DirectChildSubqueries(
         QueryExpression parent,
         IReadOnlyList<SubqueryInfo> subqueries)
@@ -329,6 +361,9 @@ public static class OutputSheetPlanBuilder
             .ToArray();
     }
 
+    /// <summary>
+    /// AST断片が別の断片へ内包されるか判定
+    /// </summary>
     private static bool ContainsFragment(TSqlFragment parent, TSqlFragment child)
     {
         if (parent.StartOffset == child.StartOffset && parent.FragmentLength == child.FragmentLength)
@@ -340,6 +375,9 @@ public static class OutputSheetPlanBuilder
             child.StartOffset + child.FragmentLength <= parent.StartOffset + parent.FragmentLength;
     }
 
+    /// <summary>
+    /// 条件式内のサブクエリ本文を出力名へ置換
+    /// </summary>
     private static OutputSheetPlan ReplaceSubqueries(
         OutputSheetPlan plan,
         string sql,
@@ -370,6 +408,9 @@ public static class OutputSheetPlanBuilder
         return plan with { Cells = cells };
     }
 
+    /// <summary>
+    /// フレーム間へ空行を置いて複数計画を連結
+    /// </summary>
     private static OutputSheetPlan CombinePlans(IReadOnlyList<OutputSheetPlan> plans)
     {
         if (plans.Count == 1)
@@ -398,6 +439,9 @@ public static class OutputSheetPlanBuilder
         return new OutputSheetPlan(cells, sections, lastRow, plans.Any(plan => plan.IsFallback));
     }
 
+    /// <summary>
+    /// 単一SELECTの各句を仕様順に描画計画へ追加
+    /// </summary>
     private static OutputSheetPlan BuildSelect(
         string sql,
         QuerySpecification query,
@@ -417,6 +461,14 @@ public static class OutputSheetPlanBuilder
             new(OutputSectionKind.Reference, 2, 2)
         };
         var row = 3;
+
+        if (query.OffsetClause is not null)
+        {
+            cells.Add(new OutputCell(row, 1, "取得範囲"));
+            cells.Add(new OutputCell(row, 7, FragmentText(sql, query.OffsetClause)));
+            sections.Add(new OutputSection(OutputSectionKind.Standard, row, row));
+            row++;
+        }
 
         if (query.TopRowFilter is not null)
         {
@@ -498,6 +550,9 @@ public static class OutputSheetPlanBuilder
             false);
     }
 
+    /// <summary>
+    /// 取得項目を出力し、消費した行数を返す
+    /// </summary>
     private static int WriteSelectElement(
         ICollection<OutputCell> cells,
         string sql,
@@ -533,6 +588,9 @@ public static class OutputSheetPlanBuilder
         return 1;
     }
 
+    /// <summary>
+    /// 検索CASEのWHENとELSEを縦方向へ展開
+    /// </summary>
     private static int WriteSearchedCase(
         ICollection<OutputCell> cells,
         string sql,
@@ -556,6 +614,9 @@ public static class OutputSheetPlanBuilder
         return Math.Max(1, row - startRow);
     }
 
+    /// <summary>
+    /// 単純CASEのWHENとELSEを縦方向へ展開
+    /// </summary>
     private static int WriteSimpleCase(
         ICollection<OutputCell> cells,
         string sql,
@@ -580,6 +641,9 @@ public static class OutputSheetPlanBuilder
         return Math.Max(1, row - startRow);
     }
 
+    /// <summary>
+    /// WHEREやHAVINGを括弧構造に応じて行へ展開
+    /// </summary>
     private static void WriteConditionSection(
         ICollection<OutputCell> cells,
         ICollection<OutputSection> sections,
@@ -640,6 +704,9 @@ public static class OutputSheetPlanBuilder
         sections.Add(new OutputSection(OutputSectionKind.Standard, startRow, row - 1));
     }
 
+    /// <summary>
+    /// 条件から外側の括弧とNOTを取り出す
+    /// </summary>
     private static bool TryGetParenthesizedCondition(
         BooleanExpression expression,
         out BooleanExpression innerCondition,
@@ -664,6 +731,9 @@ public static class OutputSheetPlanBuilder
         return false;
     }
 
+    /// <summary>
+    /// JOINの組合せとON条件を出力
+    /// </summary>
     private static void WriteJoinSection(
         ICollection<OutputCell> cells,
         ICollection<OutputSection> sections,
@@ -714,6 +784,9 @@ public static class OutputSheetPlanBuilder
         sections.Add(new OutputSection(OutputSectionKind.Standard, startRow, row - 1));
     }
 
+    /// <summary>
+    /// 連鎖JOINを内側から列挙
+    /// </summary>
     private static IEnumerable<QualifiedJoin> EnumerateJoins(TableReference table)
     {
         if (table is not QualifiedJoin join)
@@ -729,6 +802,9 @@ public static class OutputSheetPlanBuilder
         yield return join;
     }
 
+    /// <summary>
+    /// JOIN種別の表示文字列を取得
+    /// </summary>
     private static string JoinTypeText(QualifiedJoinType joinType)
     {
         return joinType switch
@@ -741,6 +817,9 @@ public static class OutputSheetPlanBuilder
         };
     }
 
+    /// <summary>
+    /// 直下のANDとORを条件部品へ分解
+    /// </summary>
     private static IReadOnlyList<ConditionPart> FlattenBooleanExpression(BooleanExpression expression)
     {
         var parts = new List<ConditionPart>();
@@ -748,6 +827,9 @@ public static class OutputSheetPlanBuilder
         return parts;
     }
 
+    /// <summary>
+    /// 論理二項式を再帰的に条件部品へ追加
+    /// </summary>
     private static void AddBooleanParts(
         BooleanExpression expression,
         string connector,
@@ -763,11 +845,17 @@ public static class OutputSheetPlanBuilder
         parts.Add(new ConditionPart(connector, expression));
     }
 
+    /// <summary>
+    /// 論理演算子の表示文字列を取得
+    /// </summary>
     private static string BooleanOperatorText(BooleanBinaryExpressionType operatorType)
     {
         return operatorType == BooleanBinaryExpressionType.Or ? "OR" : "AND";
     }
 
+    /// <summary>
+    /// GROUP BY要素を表示文字列へ変換
+    /// </summary>
     private static string RenderGrouping(string sql, GroupingSpecification grouping)
     {
         return grouping is ExpressionGroupingSpecification expressionGrouping
@@ -775,6 +863,9 @@ public static class OutputSheetPlanBuilder
             : FragmentText(sql, grouping);
     }
 
+    /// <summary>
+    /// TOP件数から外側の括弧を除いて表示
+    /// </summary>
     private static string RenderTopCount(string sql, ScalarExpression expression)
     {
         return expression is ParenthesisExpression parenthesized
@@ -782,6 +873,9 @@ public static class OutputSheetPlanBuilder
             : FragmentText(sql, expression);
     }
 
+    /// <summary>
+    /// SELECTの参照テーブル一覧を作成
+    /// </summary>
     private static string BuildTableList(
         QuerySpecification query,
         IReadOnlyList<MappingDefinition> mappings,
@@ -790,21 +884,38 @@ public static class OutputSheetPlanBuilder
         return BuildTableList(query.FromClause, mappings, additionalTables);
     }
 
+    /// <summary>
+    /// FROM句と追加参照名から参照テーブル一覧を作成
+    /// </summary>
     private static string BuildTableList(
         FromClause? fromClause,
         IReadOnlyList<MappingDefinition> mappings,
         IEnumerable<string> additionalTables)
     {
-        var displays = (fromClause?.TableReferences
+        var displays = BuildTableDisplays(fromClause, mappings, additionalTables);
+        return displays.Count == 0 ? "なし" : string.Join("、", displays);
+    }
+
+    /// <summary>
+    /// FROM句を重複のないテーブル表示へ変換
+    /// </summary>
+    private static IReadOnlyList<string> BuildTableDisplays(
+        FromClause? fromClause,
+        IReadOnlyList<MappingDefinition> mappings,
+        IEnumerable<string> additionalTables)
+    {
+        return (fromClause?.TableReferences
             .SelectMany(EnumerateNamedTables)
             .Select(table => BuildTableDisplay(table, mappings))
             ?? [])
             .Concat(additionalTables)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        return displays.Length == 0 ? "なし" : string.Join("、", displays);
     }
 
+    /// <summary>
+    /// テーブル参照を和名と識別子の表示へ変換
+    /// </summary>
     private static string BuildTableDisplay(
         NamedTableReference table,
         IReadOnlyList<MappingDefinition> mappings)
@@ -814,6 +925,9 @@ public static class OutputSheetPlanBuilder
         return $"{tableName}[{tableId}]";
     }
 
+    /// <summary>
+    /// テーブルIDから和名を解決
+    /// </summary>
     private static string ResolveTableName(
         string tableId,
         IReadOnlyList<MappingDefinition> mappings)
@@ -829,6 +943,9 @@ public static class OutputSheetPlanBuilder
         return tableName;
     }
 
+    /// <summary>
+    /// テーブル参照ツリーから実テーブルを左から列挙
+    /// </summary>
     private static IEnumerable<NamedTableReference> EnumerateNamedTables(TableReference table)
     {
         switch (table)
@@ -849,6 +966,9 @@ public static class OutputSheetPlanBuilder
         }
     }
 
+    /// <summary>
+    /// 取得項目から式本体を表示
+    /// </summary>
     private static string RenderSelectElement(string sql, SelectElement element)
     {
         return element switch
@@ -859,6 +979,9 @@ public static class OutputSheetPlanBuilder
         };
     }
 
+    /// <summary>
+    /// クエリ式を囲む括弧ノードを除去
+    /// </summary>
     private static QueryExpression UnwrapQueryExpression(QueryExpression expression)
     {
         while (expression is QueryParenthesisExpression parenthesized)
@@ -869,6 +992,9 @@ public static class OutputSheetPlanBuilder
         return expression;
     }
 
+    /// <summary>
+    /// AST位置から元SQLの文字列を取得
+    /// </summary>
     private static string FragmentText(string sql, TSqlFragment fragment)
     {
         if (fragment.StartOffset < 0 || fragment.FragmentLength <= 0 ||
@@ -880,6 +1006,9 @@ public static class OutputSheetPlanBuilder
         return sql.Substring(fragment.StartOffset, fragment.FragmentLength).Trim();
     }
 
+    /// <summary>
+    /// 未対応SQLをA1へそのまま出す計画を作成
+    /// </summary>
     private static OutputSheetPlan CreateFallback(string sql)
     {
         var text = sql.Trim();
@@ -897,6 +1026,9 @@ public static class OutputSheetPlanBuilder
         private readonly List<SubqueryInfo> _items = [];
         private readonly HashSet<(int StartOffset, int Length)> _seen = [];
 
+        /// <summary>
+        /// SELECT文から出力対象サブクエリを収集
+        /// </summary>
         public static IReadOnlyList<SubqueryInfo> Collect(SelectStatement statement)
         {
             var collector = new SubqueryCollector();
@@ -904,29 +1036,44 @@ public static class OutputSheetPlanBuilder
             return collector._items;
         }
 
+        /// <summary>
+        /// CTEを名前付きサブクエリとして追加
+        /// </summary>
         public override void ExplicitVisit(CommonTableExpression node)
         {
             Add(node.QueryExpression, node.ExpressionName.Value, true);
         }
 
+        /// <summary>
+        /// 派生テーブルを無名サブクエリとして追加
+        /// </summary>
         public override void ExplicitVisit(QueryDerivedTable node)
         {
             Add(node.QueryExpression, null, false);
             base.ExplicitVisit(node);
         }
 
+        /// <summary>
+        /// スカラーサブクエリを追加
+        /// </summary>
         public override void ExplicitVisit(ScalarSubquery node)
         {
             Add(node.QueryExpression, null, false);
             base.ExplicitVisit(node);
         }
 
+        /// <summary>
+        /// EXISTS内のサブクエリを追加
+        /// </summary>
         public override void ExplicitVisit(ExistsPredicate node)
         {
             Add(node.Subquery.QueryExpression, null, false);
             base.ExplicitVisit(node);
         }
 
+        /// <summary>
+        /// IN内のサブクエリを追加
+        /// </summary>
         public override void ExplicitVisit(InPredicate node)
         {
             if (node.Subquery is not null)
@@ -937,6 +1084,9 @@ public static class OutputSheetPlanBuilder
             base.ExplicitVisit(node);
         }
 
+        /// <summary>
+        /// 子を先に収集してから重複なく追加
+        /// </summary>
         private void Add(QueryExpression query, string? explicitName, bool isNamed)
         {
             var key = (query.StartOffset, query.FragmentLength);

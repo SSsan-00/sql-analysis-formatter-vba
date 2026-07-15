@@ -1,0 +1,239 @@
+{
+  "cases": [
+    {
+      "id": "SEL-001",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "FROM", "    users AS tb1"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-002",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "FROM", "    users AS tb1", "WHERE", "    tb1.ユーザーID = @user_id"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-003",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "FROM", "    users AS tb1", "WHERE", "    tb1.ユーザーID = @user_id", "    AND tb1.氏名 = @user_name"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-004",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "FROM", "    users AS tb1", "ORDER BY", "    tb1.ユーザーID"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-005",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "FROM", "    users AS tb1", "ORDER BY", "    tb1.ユーザーID DESC"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-006",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "FROM", "    users AS tb1", "ORDER BY", "    tb1.ユーザーID", "    , tb1.氏名 DESC"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-007",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "    , tb2.注文ID", "FROM", "    users AS tb1", "    INNER JOIN orders AS tb2", "        ON tb1.ユーザーID = tb2.注文ユーザーID"],
+      "tables": { "tb1": "ユーザー", "tb2": "注文" }
+    },
+    {
+      "id": "SEL-008",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "    , tb2.注文ID", "FROM", "    users AS tb1", "    LEFT JOIN orders AS tb2", "        ON tb1.ユーザーID = tb2.注文ユーザーID"],
+      "tables": { "tb1": "ユーザー", "tb2": "注文" }
+    },
+    {
+      "id": "SEL-009",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb2.注文ID", "    , tb3.商品ID", "FROM", "    users AS tb1", "    INNER JOIN orders AS tb2", "        ON tb1.ユーザーID = tb2.注文ユーザーID", "    LEFT JOIN order_items AS tb3", "        ON tb2.注文ID = tb3.明細注文ID"],
+      "tables": { "tb1": "ユーザー", "tb2": "注文", "tb3": "注文明細" }
+    },
+    {
+      "id": "SEL-010",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "    , tb2.氏名", "FROM", "    users AS tb1", "    LEFT JOIN users AS tb2", "        ON tb1.管理者ID = tb2.ユーザーID"],
+      "tables": { "tb1": "ユーザー", "tb2": "ユーザー" }
+    },
+    {
+      "id": "SEL-011",
+      "sql_lines": ["SELECT", "    TRIM(tb1.氏名) AS name", "    , tb1.ユーザーID", "FROM", "    users AS tb1"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-012",
+      "sql_lines": ["SELECT", "    TRIM('.' FROM tb1.氏名) AS trimmed_name", "    , tb1.ユーザーID", "FROM", "    users AS tb1"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-013",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.状態", "FROM", "    users AS tb1", "WHERE", "    tb1.状態 IN ('ACTIVE', 'LOCKED', 'PENDING')"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-014",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , COALESCE(tb1.メール, tb1.氏名, 'unknown') AS contact_text", "FROM", "    users AS tb1"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-015",
+      "sql_lines": ["SELECT", "    tb1.注文ID", "    , FORMAT(tb1.金額, 'N2', 'ja-JP') AS amount_n2", "    , FORMAT(tb1.金額, 'C', 'ja-JP') AS amount_currency", "FROM", "    orders AS tb1"],
+      "tables": { "tb1": "注文" }
+    },
+    {
+      "id": "SEL-016",
+      "sql_lines": ["SELECT", "    tb1.注文ID", "    , FORMAT(tb1.作成日時, 'yyyy/MM/dd') AS created_date", "    , FORMAT(tb1.作成日時, 'yyyyMMddHHmmss') AS created_stamp", "FROM", "    orders AS tb1"],
+      "tables": { "tb1": "注文" }
+    },
+    {
+      "id": "SEL-017",
+      "sql_lines": ["SELECT", "    CAST(tb1.注文ID AS INT) AS order_id_int", "    , CAST(tb1.金額 AS DECIMAL (18, 2)) AS amount_decimal", "    , CAST(tb1.作成日時 AS DATE) AS created_date", "    , CAST(tb1.更新日時 AS DATETIME2(3)) AS updated_at_dt", "    , CAST(tb1.状態 AS NVARCHAR(20)) AS status_text", "FROM", "    orders AS tb1"],
+      "tables": { "tb1": "注文" }
+    },
+    {
+      "id": "SEL-018",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , ISNULL(tb1.メール, 'unknown') AS email_text", "    , ISNULL(tb1.状態, 'UNKNOWN') AS status_text", "FROM", "    users AS tb1"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-019",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , SUBSTRING(tb1.メール, 1, 3) AS email_prefix", "FROM", "    users AS tb1"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-020",
+      "sql_lines": ["SELECT", "    tb1.注文ID", "    , ROUND(tb1.金額, 0) AS amount_round0", "    , ROUND(tb1.金額, 2, 1) AS amount_truncate2", "FROM", "    orders AS tb1"],
+      "tables": { "tb1": "注文" }
+    },
+    {
+      "id": "SEL-021",
+      "sql_lines": ["SELECT", "    SUM(tb1.金額) AS total_amount", "FROM", "    orders AS tb1"],
+      "tables": { "tb1": "注文" }
+    },
+    {
+      "id": "SEL-022",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , REPLACE (tb1.メール, '@old.example', '@new.example') AS normalized_email", "FROM", "    users AS tb1"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-023",
+      "sql_lines": ["SELECT", "    tb1.注文ID", "    , DATEADD(DAY, 7, tb1.作成日時) AS due_date", "    , DATEADD(MONTH, 1, tb1.作成日時) AS next_month_date", "FROM", "    orders AS tb1"],
+      "tables": { "tb1": "注文" }
+    },
+    {
+      "id": "SEL-024",
+      "sql_lines": ["SELECT", "    tb1.注文ID", "    , DATEDIFF(DAY, tb1.作成日時, tb1.更新日時) AS elapsed_days", "    , DATEDIFF(MINUTE, tb1.作成日時, tb1.更新日時) AS elapsed_minutes", "FROM", "    orders AS tb1"],
+      "tables": { "tb1": "注文" }
+    },
+    {
+      "id": "SEL-025",
+      "sql_lines": ["SELECT", "    COUNT(*) AS total_count", "    , COUNT(tb1.注文ID) AS order_count", "    , COUNT(DISTINCT tb1.注文ユーザーID) AS user_count", "FROM", "    orders AS tb1"],
+      "tables": { "tb1": "注文" }
+    },
+    {
+      "id": "SEL-026",
+      "sql_lines": ["SELECT", "    ROUND(SUM(tb1.金額), 2) AS rounded_total", "    , ISNULL(SUM(tb1.金額), 0) AS safe_total", "FROM", "    orders AS tb1"],
+      "tables": { "tb1": "注文" }
+    },
+    {
+      "id": "SEL-027",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "    , tb2.注文ID", "    , tb2.金額", "FROM", "    users AS tb1", "    LEFT JOIN orders AS tb2", "        ON tb1.ユーザーID = tb2.注文ユーザーID", "        AND tb2.状態 = @status"],
+      "tables": { "tb1": "ユーザー", "tb2": "注文" }
+    },
+    {
+      "id": "SEL-028",
+      "sql_lines": ["SELECT", "    NEXT VALUE FOR dbo.order_sequence AS next_order_id"],
+      "tables": {}
+    },
+    {
+      "id": "SEL-029",
+      "sql_lines": ["SELECT", "    seq.現在値", "FROM", "    sys.sequences AS seq", "WHERE", "    seq.シーケンス名 = 'order_sequence'"],
+      "tables": { "seq": "シーケンス" }
+    },
+    {
+      "id": "SEL-030",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "FROM", "    users AS tb1", "ORDER BY", "    tb1.ユーザーID", "OFFSET 10 ROWS FETCH NEXT 20 ROWS ONLY"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-031",
+      "sql_lines": ["SELECT TOP (10)", "    tb1.ユーザーID", "    , tb1.氏名", "FROM", "    users AS tb1", "ORDER BY", "    tb1.ユーザーID"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-032",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "FROM", "    users AS tb1", "WHERE", "    tb1.氏名 LIKE @name + '%'"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-033",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , UPPER(tb1.氏名) AS upper_name", "FROM", "    users AS tb1"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-034",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , LOWER(tb1.氏名) AS lower_name", "FROM", "    users AS tb1"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-035",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , CHARINDEX('@', tb1.メール) AS at_position", "FROM", "    users AS tb1"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-036",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "FROM", "    users AS tb1", "WHERE", "    tb1.氏名 COLLATE Japanese_BIN = @name"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-037",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "FROM", "    users AS tb1", "ORDER BY", "    tb1.氏名 COLLATE Japanese_BIN"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-038",
+      "sql_lines": ["SELECT", "    tb1.状態", "    , COUNT(tb1.ユーザーID) AS user_count", "FROM", "    users AS tb1", "GROUP BY", "    tb1.状態"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-039",
+      "sql_lines": ["SELECT", "    tb1.状態", "    , COUNT(tb1.ユーザーID) AS user_count", "FROM", "    users AS tb1", "GROUP BY", "    tb1.状態", "HAVING", "    COUNT(tb1.ユーザーID) >= 10"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-040",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , CASE", "        WHEN tb1.状態 = 'ACTIVE'", "            THEN '有効'", "        ELSE '無効'", "        END AS status_name", "FROM", "    users AS tb1"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-041",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "FROM", "    users AS tb1", "WHERE", "    (", "        tb1.状態 = @status", "        AND (tb1.氏名 LIKE @name + '%' OR tb1.メール = @email)", "    )", "    AND NOT (", "        tb1.削除日時 IS NOT NULL", "        OR tb1.ユーザーID IN (@excluded_user_id1, @excluded_user_id2)", "    )"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-042",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "FROM", "    users AS tb1", "WHERE", "    tb1.ユーザーID IN (", "        SELECT", "            tb2.注文ユーザーID", "        FROM", "            orders AS tb2", "        WHERE", "            tb2.状態 = @status", "    )"],
+      "tables": { "tb1": "ユーザー", "tb2": "注文" }
+    },
+    {
+      "id": "SEL-043",
+      "sql_lines": ["WITH target_users AS (", "    SELECT", "        tb1.ユーザーID", "        , tb1.氏名", "    FROM", "        users AS tb1", "    WHERE", "        tb1.状態 = @status", ")", "SELECT", "    target_users.ユーザーID", "    , target_users.氏名", "FROM", "    target_users"],
+      "tables": { "tb1": "ユーザー", "target_users": "(和名未取得)" }
+    },
+    {
+      "id": "SEL-044",
+      "sql_lines": ["SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "FROM", "    users AS tb1", "WHERE", "    tb1.状態 = 'ACTIVE'", "UNION", "SELECT", "    tb2.ユーザーID", "    , tb2.氏名", "FROM", "    archived_users AS tb2", "WHERE", "    tb2.状態 = 'ACTIVE'"],
+      "tables": { "tb1": "ユーザー", "tb2": "退会ユーザー" }
+    },
+    {
+      "id": "SEL-045",
+      "sql_lines": ["INSERT INTO user_archive(ユーザーID, 氏名, 状態)", "SELECT", "    tb1.ユーザーID", "    , tb1.氏名", "    , tb1.状態", "FROM", "    users AS tb1", "WHERE", "    tb1.削除日時 < @archive_before"],
+      "tables": { "user_archive": "ユーザーアーカイブ", "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-046",
+      "sql_lines": ["DELETE tb1", "FROM", "    users AS tb1", "WHERE", "    tb1.削除日時 < @delete_before", "    AND tb1.状態 = 'INACTIVE'"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-047",
+      "sql_lines": ["UPDATE tb1", "SET", "    状態 = @status", "    , 更新日時 = sysdatetime()", "FROM", "    users AS tb1", "    INNER JOIN orders AS tb2", "        ON tb1.ユーザーID = tb2.注文ユーザーID", "WHERE", "    tb2.状態 = @order_status"],
+      "tables": { "tb1": "ユーザー", "tb2": "注文" }
+    }
+  ]
+}

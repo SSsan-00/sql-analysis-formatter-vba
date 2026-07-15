@@ -19,4 +19,9 @@
     <ProjectReference Include="..\..\tools\SqlAnalysisFormatter.Parser\SqlAnalysisFormatter.Parser.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="..\OutputReportCases.json" Link="OutputReportCases.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\SqlAnalysisFormatter.OutputExpectations.xlsx" Link="SqlAnalysisFormatter.OutputExpectations.xlsx" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

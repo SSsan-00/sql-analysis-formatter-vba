@@ -8,6 +8,9 @@ namespace SqlAnalysisFormatter.Parser.Tests;
 [TestClass]
 public sealed class TsqlAstParserTests
 {
+    /// <summary>
+    /// 先頭文のCRUD種別を分類できることを確認
+    /// </summary>
     [TestMethod]
     [DataRow("select users.user_id from users", "SELECT")]
     [DataRow("insert into users(user_id) values (1)", "INSERT")]
@@ -23,6 +26,9 @@ public sealed class TsqlAstParserTests
         Assert.AreEqual(sql, result.Blocks[0].Text);
     }
 
+    /// <summary>
+    /// ネストしたサブクエリを内側から返すことを確認
+    /// </summary>
     [TestMethod]
     public void Parse_ReturnsNestedSubqueriesInsideOut()
     {
@@ -65,6 +71,9 @@ public sealed class TsqlAstParserTests
         StringAssert.StartsWith(result.Blocks[2].Text, "with high_value_orders");
     }
 
+    /// <summary>
+    /// 未対応文をSQL全体の単一ブロックとして返すことを確認
+    /// </summary>
     [TestMethod]
     public void Parse_ReturnsUnsupportedQueryAsSingleBlock()
     {
@@ -81,6 +90,9 @@ public sealed class TsqlAstParserTests
         Assert.AreEqual(sql.Trim(), result.Blocks[0].Text);
     }
 
+    /// <summary>
+    /// 構文エラー時に元SQLへフォールバックすることを確認
+    /// </summary>
     [TestMethod]
     public void Parse_FallsBackToOriginalSqlWhenParseFails()
     {
