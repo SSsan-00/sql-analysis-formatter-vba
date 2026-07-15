@@ -1,6 +1,7 @@
 ﻿param(
     [string]$ParserExePath = 'dist\parser\SqlAnalysisFormatter.Parser.exe',
-    [string]$CaseId = ''
+    [string]$CaseId = '',
+    [switch]$MeasurePerformance
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,9 +11,18 @@ $workbookPath = Join-Path $repoRoot 'SqlAnalysisFormatter.xlsm'
 $expectationPath = Join-Path $repoRoot 'tests\SqlAnalysisFormatter.OutputExpectations.xlsx'
 $fixturePath = Join-Path $repoRoot 'tests\OutputReportCases.json'
 $mainModulePath = Join-Path $repoRoot 'src\vba\SqlAnalysisFormatter.bas'
+$goldenTestModulePath = Join-Path $repoRoot 'src\vba\SqlAnalysisFormatterGoldenTests.bas'
 $tempWorkbookPath = Join-Path $env:TEMP ('SqlAnalysisFormatter_Golden_' + [guid]::NewGuid().ToString('N') + '.xlsm')
 $previousParserExePath = $env:SQL_ANALYSIS_FORMATTER_PARSER_EXE
 $env:SQL_ANALYSIS_FORMATTER_PARSER_EXE = (Resolve-Path (Join-Path $repoRoot $ParserExePath))
+$totalTimer = [System.Diagnostics.Stopwatch]::StartNew()
+$phaseMilliseconds = [ordered]@{
+    Reset = 0.0
+    Input = 0.0
+    Analyze = 0.0
+    Values = 0.0
+    Formats = 0.0
+}
 
 # COM参照を明示的に解放する
 function Release-ComObject {
@@ -37,48 +47,6 @@ function Assert-Equal {
     }
 }
 
-# 数値が許容差を超えた場合は停止する
-function Assert-Near {
-    param(
-        [string]$CaseId,
-        [string]$Location,
-        [double]$Expected,
-        [double]$Actual,
-        [double]$Tolerance = 0.01
-    )
-
-    if ([Math]::Abs($Expected - $Actual) -gt $Tolerance) {
-        throw "$CaseId $Location expected=[$Expected] actual=[$Actual]"
-    }
-}
-
-# 罫線、塗り、フォント、折り返しを期待セルと比較する
-function Compare-CellFormat {
-    param(
-        [string]$CaseId,
-        [object]$ExpectedCell,
-        [object]$ActualCell
-    )
-
-    $address = $ExpectedCell.Address($false, $false)
-    Assert-Equal $CaseId "$address fill" $ExpectedCell.Interior.Color $ActualCell.Interior.Color
-    Assert-Equal $CaseId "$address font" $ExpectedCell.Font.Name $ActualCell.Font.Name
-    Assert-Near $CaseId "$address font-size" $ExpectedCell.Font.Size $ActualCell.Font.Size
-    Assert-Equal $CaseId "$address wrap" $ExpectedCell.WrapText $ActualCell.WrapText
-
-    foreach ($borderIndex in @(7, 8, 9, 10)) {
-        $expectedBorder = $ExpectedCell.Borders.Item($borderIndex)
-        $actualBorder = $ActualCell.Borders.Item($borderIndex)
-        Assert-Equal $CaseId "$address border-$borderIndex" $expectedBorder.LineStyle $actualBorder.LineStyle
-        if ($expectedBorder.LineStyle -ne -4142) {
-            Assert-Equal $CaseId "$address border-$borderIndex-weight" $expectedBorder.Weight $actualBorder.Weight
-            Assert-Equal $CaseId "$address border-$borderIndex-color" $expectedBorder.Color $actualBorder.Color
-        }
-        Release-ComObject $expectedBorder
-        Release-ComObject $actualBorder
-    }
-}
-
 Copy-Item -LiteralPath $workbookPath -Destination $tempWorkbookPath -Force
 $fixture = Get-Content -LiteralPath $fixturePath -Encoding UTF8 -Raw | ConvertFrom-Json
 $testCases = @($fixture.cases)
@@ -96,23 +64,36 @@ $excel.AutomationSecurity = 1
 try {
     $workbook = $excel.Workbooks.Open($tempWorkbookPath)
     $expectationBook = $excel.Workbooks.Open($expectationPath, 0, $true)
+    $excel.ScreenUpdating = $false
+    $excel.EnableEvents = $false
+    $excel.Calculation = -4135
     $components = $workbook.VBProject.VBComponents
-    try {
-        $components.Remove($components.Item('SqlAnalysisFormatter'))
-    } catch {
+    foreach ($moduleName in @('SqlAnalysisFormatter', 'SqlAnalysisFormatterGoldenTests')) {
+        try {
+            $components.Remove($components.Item($moduleName))
+        } catch {
+        }
     }
     $components.Import($mainModulePath) | Out-Null
+    $components.Import($goldenTestModulePath) | Out-Null
 
     $definitionSheet = $workbook.Worksheets.Item('変換定義')
     $sqlSheet = $workbook.Worksheets.Item('SQL解析')
     $outputSheet = $workbook.Worksheets.Item('アウトプット')
-    $formatColumns = @(1, 6, 7, 15, 17, 18, 19, 31, 32, 36, 37, 90)
+    $expectationBookName = [string]$expectationBook.Name
+    $outputSheetName = [string]$outputSheet.Name
+    $definitionClearLastRow = [Math]::Max(2, [int]$definitionSheet.UsedRange.Rows.Count)
+    $sqlClearLastRow = [Math]::Max(2, [int]$sqlSheet.UsedRange.Rows.Count)
     $caseIndex = 0
 
     foreach ($testCase in $testCases) {
         $caseIndex++
-        $excel.Run("'$tempWorkbookPath'!ClearData", $false) | Out-Null
+        $phaseTimer = [System.Diagnostics.Stopwatch]::StartNew()
+        $definitionSheet.Range("A2:D$definitionClearLastRow").ClearContents() | Out-Null
+        $sqlSheet.Range("A2:Z$sqlClearLastRow").ClearContents() | Out-Null
+        $phaseMilliseconds.Reset += $phaseTimer.Elapsed.TotalMilliseconds
 
+        $phaseTimer.Restart()
         $definitionRow = 2
         $tableProperties = @($testCase.tables.PSObject.Properties)
         if ($tableProperties.Count -eq 0) {
@@ -131,8 +112,15 @@ try {
             $sqlSheet.Cells.Item($sqlRow, 1).Value2 = [string]$line
             $sqlRow++
         }
+        $definitionClearLastRow = [Math]::Max(2, $definitionRow - 1)
+        $sqlClearLastRow = [Math]::Max(2, $sqlRow - 1)
+        $phaseMilliseconds.Input += $phaseTimer.Elapsed.TotalMilliseconds
 
+        $phaseTimer.Restart()
         $excel.Run("'$tempWorkbookPath'!AnalyzeQueries", $false) | Out-Null
+        $phaseMilliseconds.Analyze += $phaseTimer.Elapsed.TotalMilliseconds
+
+        $phaseTimer.Restart()
         $expectedSheet = $expectationBook.Worksheets.Item([string]$testCase.id)
         $expectedRowCount = $expectedSheet.UsedRange.Rows.Count
         $expectedRange = $expectedSheet.Range("A1:CL$expectedRowCount")
@@ -144,27 +132,38 @@ try {
             for ($column = 1; $column -le 90; $column++) {
                 Assert-Equal ([string]$testCase.id) ("R{0}C{1}" -f $row, $column) $expectedValues[$row, $column] $actualValues[$row, $column]
             }
-            Assert-Near ([string]$testCase.id) "row-$row-height" $expectedSheet.Rows.Item($row).RowHeight $outputSheet.Rows.Item($row).RowHeight
-
-            foreach ($column in $formatColumns) {
-                $expectedCell = $expectedSheet.Cells.Item($row, $column)
-                $actualCell = $outputSheet.Cells.Item($row, $column)
-                Compare-CellFormat ([string]$testCase.id) $expectedCell $actualCell
-                Release-ComObject $expectedCell
-                Release-ComObject $actualCell
-            }
         }
+        $phaseMilliseconds.Values += $phaseTimer.Elapsed.TotalMilliseconds
 
+        $phaseTimer.Restart()
+        $formatFailure = [string]$excel.Run(
+            "'$tempWorkbookPath'!CompareOutputGoldenFormat",
+            [string]$testCase.id,
+            $expectationBookName,
+            [string]$testCase.id,
+            $outputSheetName,
+            [int]$expectedRowCount,
+            [bool]($caseIndex -eq 1))
+        if (-not [string]::IsNullOrEmpty($formatFailure)) {
+            throw $formatFailure
+        }
         if ($caseIndex -eq 1) {
-            for ($column = 1; $column -le 90; $column++) {
-                Assert-Near ([string]$testCase.id) "column-$column-width" $expectedSheet.Columns.Item($column).ColumnWidth $outputSheet.Columns.Item($column).ColumnWidth
+            $originalWrapText = $outputSheet.Cells.Item(1, 1).WrapText
+            $outputSheet.Cells.Item(1, 1).WrapText = -not [bool]$originalWrapText
+            $comparatorSelfTest = [string]$excel.Run(
+                "'$tempWorkbookPath'!CompareOutputGoldenFormat",
+                [string]$testCase.id,
+                $expectationBookName,
+                [string]$testCase.id,
+                $outputSheetName,
+                [int]$expectedRowCount,
+                $false)
+            $outputSheet.Cells.Item(1, 1).WrapText = $originalWrapText
+            if ($comparatorSelfTest -notlike "*$($testCase.id) A1 wrap*") {
+                throw "Output format comparator did not detect the intentional mismatch."
             }
         }
-
-        $outputSheet.Activate() | Out-Null
-        if ($excel.ActiveWindow.DisplayGridlines) {
-            throw "$($testCase.id) gridlines should be hidden"
-        }
+        $phaseMilliseconds.Formats += $phaseTimer.Elapsed.TotalMilliseconds
 
         Release-ComObject $actualRange
         Release-ComObject $expectedRange
@@ -175,6 +174,13 @@ try {
     }
 
     Write-Output ("Output golden tests passed: {0} cases." -f $testCases.Count)
+    if ($MeasurePerformance) {
+        $totalTimer.Stop()
+        foreach ($phase in $phaseMilliseconds.GetEnumerator()) {
+            Write-Output ("Output golden timing: {0}={1:N0} ms" -f $phase.Key, $phase.Value)
+        }
+        Write-Output ("Output golden timing: Total={0:N0} ms" -f $totalTimer.Elapsed.TotalMilliseconds)
+    }
 } finally {
     if ($null -ne $expectationBook) {
         $expectationBook.Close($false) | Out-Null
