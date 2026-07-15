@@ -195,11 +195,15 @@ Public Sub ClearData_ClearsOutputSheet()
     Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
     wsOutput.Cells(1, 1).Value = "output header"
     wsOutput.Cells(3, 2).Value = "output detail"
+    wsOutput.Cells(4, 90).Value = "last column output"
+    wsOutput.Cells(5, 1).Formula = "=""formula output"""
 
     ClearData False
 
     AssertCellValue wsOutput.Cells(1, 1), ""
     AssertCellValue wsOutput.Cells(3, 2), ""
+    AssertCellValue wsOutput.Cells(4, 90), ""
+    AssertCellValue wsOutput.Cells(5, 1), ""
     AssertOutputSheetFont
 End Sub
 

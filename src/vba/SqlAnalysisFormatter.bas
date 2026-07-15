@@ -1386,7 +1386,12 @@ Private Function LastOutputRow(ByVal ws As Worksheet) As Long
     Dim foundCell As Range
 
     LastOutputRow = 1
-    Set outputRange = ws.Range(ws.Cells(1, 1), ws.Cells(ws.Rows.Count, OUTPUT_LAST_COLUMN))
+    ' 値が存在し得る使用範囲だけへ絞り、全104万行の反復検索を避ける
+    Set outputRange = Intersect( _
+        ws.UsedRange, _
+        ws.Range(ws.Columns(1), ws.Columns(OUTPUT_LAST_COLUMN)))
+    If outputRange Is Nothing Then Exit Function
+
     Set foundCell = outputRange.Find( _
         What:="*", _
         After:=outputRange.Cells(1, 1), _
