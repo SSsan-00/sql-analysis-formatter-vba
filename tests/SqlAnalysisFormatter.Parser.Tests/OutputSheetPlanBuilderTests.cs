@@ -485,6 +485,95 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
+    /// 集計関数の引数にあるCASEを外側の式と分岐へ展開することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_ExpandsCaseInsideAggregateFunction()
+    {
+        const string sql = """
+            SELECT
+                SUM(
+                    CASE
+                        WHEN tb1.状態 = 'PAID' THEN tb1.金額
+                        ELSE 0
+                    END
+                ) AS paid_amount
+            FROM
+                orders AS tb1
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, [new("tb1", "注文", "", "")]);
+
+        Assert.AreEqual(4, plan.RowCount);
+        AssertCells(
+            plan,
+            (1, 1, "＜DB入出力項目定義＞"),
+            (2, 1, "参照テーブル: 注文[tb1]"),
+            (3, 1, "取得項目"),
+            (3, 7, "取得項目1"),
+            (3, 15, ":"),
+            (3, 17, "paid_amount"),
+            (3, 31, "※"),
+            (3, 32, "SUM(CASE結果)"),
+            (3, 34, "tb1.状態 = 'PAID' → tb1.金額"),
+            (4, 34, "それ以外 → 0"));
+    }
+
+    /// <summary>
+    /// ELSEにあるCASEを外側の分岐より一段深く展開することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_ExpandsCaseNestedInsideElse()
+    {
+        const string sql = """
+            SELECT
+                CASE
+                    WHEN tb1.状態 = 'ACTIVE' THEN '有効'
+                    ELSE
+                        CASE
+                            WHEN tb1.削除日時 IS NULL THEN '保留'
+                            ELSE '無効'
+                        END
+                END AS user_status
+            FROM
+                users AS tb1
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, [new("tb1", "ユーザー", "", "")]);
+
+        Assert.AreEqual(6, plan.RowCount);
+        Assert.AreEqual("tb1.状態 = 'ACTIVE' → '有効'", CellValue(plan, 3, 32));
+        Assert.AreEqual("それ以外 → CASE", CellValue(plan, 4, 32));
+        Assert.AreEqual("tb1.削除日時 IS NULL → '保留'", CellValue(plan, 5, 34));
+        Assert.AreEqual("それ以外 → '無効'", CellValue(plan, 6, 34));
+    }
+
+    /// <summary>
+    /// 列エイリアスのないCASEもCASE結果と分岐へ展開することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_ExpandsUnaliasedCaseExpression()
+    {
+        const string sql = """
+            SELECT
+                CASE
+                    WHEN tb1.状態 = 'ACTIVE' THEN 1
+                    ELSE 0
+                END
+            FROM
+                users AS tb1
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, [new("tb1", "ユーザー", "", "")]);
+
+        Assert.AreEqual(4, plan.RowCount);
+        Assert.AreEqual("CASE結果", CellValue(plan, 3, 17));
+        Assert.AreEqual("※", CellValue(plan, 3, 31));
+        Assert.AreEqual("tb1.状態 = 'ACTIVE' → 1", CellValue(plan, 3, 32));
+        Assert.AreEqual("それ以外 → 0", CellValue(plan, 4, 32));
+    }
+
+    /// <summary>
     /// GROUP BYのCASEを取得項目のエイリアスと分岐へ展開することを確認
     /// </summary>
     [TestMethod]
@@ -556,18 +645,97 @@ public sealed class OutputSheetPlanBuilderTests
                 users as tb1
             where
                 case
-                    when tb1.状態 = 'ACTIVE' and tb1.削除日時 is null then 1
+                    when (tb1.状態 = 'ACTIVE' and tb1.削除日時 is null) then 1
                     else 0
                 end = 1
             """;
 
         var plan = OutputSheetPlanBuilder.Build(sql, [new("tb1", "ユーザー", "", "")]);
 
-        Assert.AreEqual(5, plan.RowCount);
+        Assert.AreEqual(6, plan.RowCount);
         Assert.AreEqual("CASE結果 = 1", CellValue(plan, 4, 17));
         Assert.AreEqual("※", CellValue(plan, 4, 31));
-        Assert.AreEqual("tb1.状態 = 'ACTIVE' AND tb1.削除日時 IS NULL → 1", CellValue(plan, 4, 32));
+        Assert.AreEqual("tb1.状態 = 'ACTIVE'", CellValue(plan, 4, 32));
+        Assert.AreEqual("AND tb1.削除日時 IS NULL → 1", CellValue(plan, 5, 32));
+        Assert.AreEqual("それ以外 → 0", CellValue(plan, 6, 32));
+    }
+
+    /// <summary>
+    /// HAVINGの集計関数内にあるCASEを条件式と分岐へ展開することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_ExpandsCaseInsideHavingAggregate()
+    {
+        const string sql = """
+            SELECT
+                tb1.ユーザーID
+            FROM
+                orders AS tb1
+            GROUP BY
+                tb1.ユーザーID
+            HAVING
+                SUM(CASE WHEN tb1.状態 = 'PAID' THEN 1 ELSE 0 END) > 0
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, [new("tb1", "注文", "", "")]);
+
+        Assert.AreEqual("SUM(CASE結果) > 0", CellValue(plan, 5, 17));
+        Assert.AreEqual("※", CellValue(plan, 5, 31));
+        Assert.AreEqual("tb1.状態 = 'PAID' → 1", CellValue(plan, 5, 32));
+        Assert.AreEqual("それ以外 → 0", CellValue(plan, 6, 32));
+    }
+
+    /// <summary>
+    /// GROUP BYとORDER BYで関数内にあるCASEをそれぞれ展開することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_ExpandsWrappedCasesUsedByGroupAndOrder()
+    {
+        const string sql = """
+            SELECT
+                tb1.ユーザーID
+            FROM
+                users AS tb1
+            GROUP BY
+                COALESCE(CASE WHEN tb1.状態 = 'ACTIVE' THEN 1 ELSE 0 END, 0)
+            ORDER BY
+                IIF(CASE WHEN tb1.状態 = 'ACTIVE' THEN 1 ELSE 0 END = 1, 0, 1)
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, [new("tb1", "ユーザー", "", "")]);
+
+        Assert.AreEqual("COALESCE(CASE結果, 0)", CellValue(plan, 4, 17));
+        Assert.AreEqual("tb1.状態 = 'ACTIVE' → 1", CellValue(plan, 4, 32));
         Assert.AreEqual("それ以外 → 0", CellValue(plan, 5, 32));
+        Assert.AreEqual("IIF(CASE結果 = 1, 0, 1)", CellValue(plan, 6, 17));
+        Assert.AreEqual("tb1.状態 = 'ACTIVE' → 1", CellValue(plan, 6, 32));
+        Assert.AreEqual("それ以外 → 0", CellValue(plan, 7, 32));
+    }
+
+    /// <summary>
+    /// 同じ式に複数あるCASEを番号付きの結果と分岐へ展開することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_ExpandsMultipleCasesInsideOneExpression()
+    {
+        const string sql = """
+            SELECT
+                SUM(CASE WHEN tb1.状態 = 'PAID' THEN tb1.金額 ELSE 0 END)
+                + SUM(CASE WHEN tb1.状態 = 'REFUND' THEN tb1.金額 ELSE 0 END) AS net_amount
+            FROM
+                orders AS tb1
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, [new("tb1", "注文", "", "")]);
+
+        Assert.AreEqual(6, plan.RowCount);
+        Assert.AreEqual("SUM(CASE結果1) + SUM(CASE結果2)", CellValue(plan, 3, 32));
+        Assert.AreEqual("CASE結果1", CellValue(plan, 3, 34));
+        Assert.AreEqual("tb1.状態 = 'PAID' → tb1.金額", CellValue(plan, 3, 36));
+        Assert.AreEqual("それ以外 → 0", CellValue(plan, 4, 36));
+        Assert.AreEqual("CASE結果2", CellValue(plan, 5, 34));
+        Assert.AreEqual("tb1.状態 = 'REFUND' → tb1.金額", CellValue(plan, 5, 36));
+        Assert.AreEqual("それ以外 → 0", CellValue(plan, 6, 36));
     }
 
     /// <summary>
@@ -685,6 +853,39 @@ public sealed class OutputSheetPlanBuilderTests
             (9, 15, "OR"),
             (9, 17, "tb1.ユーザーID IN (@excluded_user_id1, @excluded_user_id2)"),
             (10, 7, ")"));
+    }
+
+    /// <summary>
+    /// JOIN条件のCASEと複合WHEN条件を結合表の複数行へ展開することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_ExpandsCaseInsideJoinCondition()
+    {
+        const string sql = """
+            SELECT
+                tb1.ユーザーID
+            FROM
+                users AS tb1
+                INNER JOIN user_rules AS tb2
+                    ON CASE
+                        WHEN tb1.状態 = 'ACTIVE' AND tb2.有効区分 = 1 THEN tb1.ユーザーID
+                        ELSE 0
+                    END = tb2.対象ユーザーID
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "ユーザー", "", ""),
+            new("tb2", "ユーザールール", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.AreEqual(7, plan.RowCount);
+        Assert.AreEqual("CASE結果 = tb2.対象ユーザーID", CellValue(plan, 5, 17));
+        Assert.AreEqual("※", CellValue(plan, 5, 31));
+        Assert.AreEqual("tb1.状態 = 'ACTIVE'", CellValue(plan, 5, 32));
+        Assert.AreEqual("AND tb2.有効区分 = 1 → tb1.ユーザーID", CellValue(plan, 6, 32));
+        Assert.AreEqual("それ以外 → 0", CellValue(plan, 7, 32));
     }
 
     /// <summary>

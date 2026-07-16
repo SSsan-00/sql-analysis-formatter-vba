@@ -1,4 +1,5 @@
 using Microsoft.SqlServer.TransactSql.ScriptDom;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace SqlAnalysisFormatter.Parser;
@@ -904,11 +905,16 @@ public static class OutputSheetPlanBuilder
 
                 cells.Add(new OutputCell(row, 7, $"ソートキー{index + 1}"));
                 cells.Add(new OutputCell(row, 15, ":"));
-                if (IsCaseExpression(element.Expression))
+                var cases = DirectCaseExpressions(element.Expression);
+                if (cases.Count > 0)
                 {
-                    cells.Add(new OutputCell(row, 17, "CASE結果"));
-                    cells.Add(new OutputCell(row, 31, "※"));
-                    row += WriteCaseBranches(cells, sql, element.Expression, row);
+                    row += WriteScalarExpression(
+                        cells,
+                        sql,
+                        element.Expression,
+                        row,
+                        displayName: null,
+                        valueSuffix: element.SortOrder == SortOrder.Descending ? "(降順)" : string.Empty);
                 }
                 else
                 {
@@ -959,16 +965,18 @@ public static class OutputSheetPlanBuilder
             cells.Add(new OutputCell(row, 7, $"グループキー{index + 1}"));
             cells.Add(new OutputCell(row, 15, ":"));
             var grouping = groupByClause.GroupingSpecifications[index];
-            if (TryGetGroupingCase(grouping, out var groupingCase))
+            if (TryGetGroupingExpression(grouping, out var groupingExpression) &&
+                DirectCaseExpressions(groupingExpression).Count > 0)
             {
-                cells.Add(new OutputCell(
+                var alias = query is null
+                    ? null
+                    : FindSelectAlias(sql, query, groupingExpression);
+                row += WriteScalarExpression(
+                    cells,
+                    sql,
+                    groupingExpression,
                     row,
-                    17,
-                    query is null
-                        ? "CASE結果"
-                        : FindSelectAlias(sql, query, groupingCase) ?? "CASE結果"));
-                cells.Add(new OutputCell(row, 31, "※"));
-                row += WriteCaseBranches(cells, sql, groupingCase, row);
+                    alias);
             }
             else
             {
@@ -996,25 +1004,71 @@ public static class OutputSheetPlanBuilder
             cells.Add(new OutputCell(row, 1, "取得項目"));
         }
 
-        if (element is SelectScalarExpression scalar && scalar.ColumnName is not null)
+        if (element is SelectScalarExpression scalar)
         {
-            cells.Add(new OutputCell(row, 17, FragmentText(sql, scalar.ColumnName)));
-            cells.Add(new OutputCell(row, 31, "※"));
-            if (scalar.Expression is SearchedCaseExpression searchedCase)
-            {
-                return WriteSearchedCase(cells, sql, searchedCase, row);
-            }
-            if (scalar.Expression is SimpleCaseExpression simpleCase)
-            {
-                return WriteSimpleCase(cells, sql, simpleCase, row);
-            }
-
-            cells.Add(new OutputCell(row, 32, DisplayText(sql, scalar.Expression)));
-            return 1;
+            var alias = scalar.ColumnName is null
+                ? null
+                : FragmentText(sql, scalar.ColumnName);
+            return WriteScalarExpression(cells, sql, scalar.Expression, row, alias);
         }
 
         cells.Add(new OutputCell(row, 17, RenderSelectElementForDisplay(sql, element)));
         return 1;
+    }
+
+    /// <summary>
+    /// スカラー式を表示名、CASE概要、分岐へ展開
+    /// </summary>
+    private static int WriteScalarExpression(
+        ICollection<OutputCell> cells,
+        string sql,
+        ScalarExpression expression,
+        int row,
+        string? displayName,
+        string valueSuffix = "")
+    {
+        var cases = DirectCaseExpressions(expression);
+        if (cases.Count == 0)
+        {
+            if (displayName is null)
+            {
+                cells.Add(new OutputCell(row, 17, DisplayText(sql, expression) + valueSuffix));
+            }
+            else
+            {
+                cells.Add(new OutputCell(row, 17, displayName));
+                cells.Add(new OutputCell(row, 31, "※"));
+                cells.Add(new OutputCell(row, 32, DisplayText(sql, expression)));
+            }
+
+            return 1;
+        }
+
+        var isDirectCase = cases.Count == 1 && ReferenceEquals(expression, cases[0]);
+        if (displayName is null)
+        {
+            var value = isDirectCase
+                ? "CASE結果"
+                : RenderExpressionWithCasePlaceholders(sql, expression, cases);
+            cells.Add(new OutputCell(row, 17, value + valueSuffix));
+            cells.Add(new OutputCell(row, 31, "※"));
+            return isDirectCase
+                ? WriteCaseBranches(cells, sql, cases[0], row)
+                : WriteEmbeddedCaseBranches(cells, sql, cases, row, 32);
+        }
+
+        cells.Add(new OutputCell(row, 17, displayName));
+        cells.Add(new OutputCell(row, 31, "※"));
+        if (isDirectCase)
+        {
+            return WriteCaseBranches(cells, sql, cases[0], row);
+        }
+
+        cells.Add(new OutputCell(
+            row,
+            32,
+            RenderExpressionWithCasePlaceholders(sql, expression, cases)));
+        return WriteEmbeddedCaseBranches(cells, sql, cases, row, 34);
     }
 
     /// <summary>
@@ -1030,33 +1084,37 @@ public static class OutputSheetPlanBuilder
         var row = startRow;
         foreach (var clause in expression.WhenClauses)
         {
-            var condition = DisplayText(sql, clause.WhenExpression);
-            if (clause.ThenExpression is SearchedCaseExpression nestedSearchedCase)
+            var conditions = FlattenBooleanExpression(UnwrapCaseCondition(clause.WhenExpression));
+            for (var index = 0; index < conditions.Count - 1; index++)
             {
-                cells.Add(new OutputCell(row, column, $"{condition} → CASE"));
-                row++;
-                row += WriteSearchedCase(cells, sql, nestedSearchedCase, row, column + 2);
-            }
-            else if (clause.ThenExpression is SimpleCaseExpression nestedSimpleCase)
-            {
-                cells.Add(new OutputCell(row, column, $"{condition} → CASE"));
-                row++;
-                row += WriteSimpleCase(cells, sql, nestedSimpleCase, row, column + 2);
-            }
-            else
-            {
-                cells.Add(new OutputCell(
-                    row,
-                    column,
-                    $"{condition} → {DisplayText(sql, clause.ThenExpression)}"));
+                var part = conditions[index];
+                var prefix = part.Connector.Length == 0 ? string.Empty : part.Connector + " ";
+                cells.Add(new OutputCell(row, column, prefix + ConditionDisplayText(sql, part.Expression)));
                 row++;
             }
+
+            var finalCondition = conditions[^1];
+            var finalPrefix = finalCondition.Connector.Length == 0
+                ? string.Empty
+                : finalCondition.Connector + " ";
+            row = WriteCaseResultLine(
+                cells,
+                sql,
+                finalPrefix + ConditionDisplayText(sql, finalCondition.Expression),
+                clause.ThenExpression,
+                row,
+                column);
         }
 
         if (expression.ElseExpression is not null)
         {
-            cells.Add(new OutputCell(row, column, $"それ以外 → {DisplayText(sql, expression.ElseExpression)}"));
-            row++;
+            row = WriteCaseResultLine(
+                cells,
+                sql,
+                "それ以外",
+                expression.ElseExpression,
+                row,
+                column);
         }
 
         return Math.Max(1, row - startRow);
@@ -1076,18 +1134,70 @@ public static class OutputSheetPlanBuilder
         var input = DisplayText(sql, expression.InputExpression);
         foreach (var clause in expression.WhenClauses)
         {
-            var value = $"{input} = {DisplayText(sql, clause.WhenExpression)} → {DisplayText(sql, clause.ThenExpression)}";
-            cells.Add(new OutputCell(row, column, value));
-            row++;
+            row = WriteCaseResultLine(
+                cells,
+                sql,
+                $"{input} = {DisplayText(sql, clause.WhenExpression)}",
+                clause.ThenExpression,
+                row,
+                column);
         }
 
         if (expression.ElseExpression is not null)
         {
-            cells.Add(new OutputCell(row, column, $"それ以外 → {DisplayText(sql, expression.ElseExpression)}"));
-            row++;
+            row = WriteCaseResultLine(
+                cells,
+                sql,
+                "それ以外",
+                expression.ElseExpression,
+                row,
+                column);
         }
 
         return Math.Max(1, row - startRow);
+    }
+
+    /// <summary>
+    /// WHEN条件全体を囲む括弧を除き、内部のANDとORを分解可能にする
+    /// </summary>
+    private static BooleanExpression UnwrapCaseCondition(BooleanExpression expression)
+    {
+        while (expression is BooleanParenthesisExpression parenthesized)
+        {
+            expression = parenthesized.Expression;
+        }
+
+        return expression;
+    }
+
+    /// <summary>
+    /// CASE分岐の結果式と、その内側にあるCASEを階層表示
+    /// </summary>
+    private static int WriteCaseResultLine(
+        ICollection<OutputCell> cells,
+        string sql,
+        string condition,
+        ScalarExpression result,
+        int row,
+        int column)
+    {
+        var cases = DirectCaseExpressions(result);
+        if (cases.Count == 0)
+        {
+            cells.Add(new OutputCell(row, column, $"{condition} → {DisplayText(sql, result)}"));
+            return row + 1;
+        }
+
+        var isDirectCase = cases.Count == 1 && ReferenceEquals(result, cases[0]);
+        var resultText = isDirectCase
+            ? "CASE"
+            : RenderExpressionWithCasePlaceholders(sql, result, cases);
+        cells.Add(new OutputCell(row, column, $"{condition} → {resultText}"));
+        row++;
+        var consumedRows = isDirectCase
+            ? WriteCaseBranches(cells, sql, cases[0], row, column + 2)
+            : WriteEmbeddedCaseBranches(cells, sql, cases, row, column + 2);
+        return row + consumedRows;
     }
 
     /// <summary>
@@ -1111,22 +1221,38 @@ public static class OutputSheetPlanBuilder
     }
 
     /// <summary>
-    /// 式がCASEか判定
+    /// 式に埋め込まれたCASEを単数または番号付きで展開
     /// </summary>
-    private static bool IsCaseExpression(ScalarExpression expression)
+    private static int WriteEmbeddedCaseBranches(
+        ICollection<OutputCell> cells,
+        string sql,
+        IReadOnlyList<ScalarExpression> cases,
+        int startRow,
+        int column)
     {
-        return expression is SearchedCaseExpression or SimpleCaseExpression;
+        if (cases.Count == 1)
+        {
+            return WriteCaseBranches(cells, sql, cases[0], startRow, column);
+        }
+
+        var row = startRow;
+        for (var index = 0; index < cases.Count; index++)
+        {
+            cells.Add(new OutputCell(row, column, $"CASE結果{index + 1}"));
+            row += WriteCaseBranches(cells, sql, cases[index], row, column + 2);
+        }
+
+        return Math.Max(1, row - startRow);
     }
 
     /// <summary>
-    /// GROUP BY要素からCASE式を取得
+    /// GROUP BY要素からスカラー式を取得
     /// </summary>
-    private static bool TryGetGroupingCase(
+    private static bool TryGetGroupingExpression(
         GroupingSpecification grouping,
         out ScalarExpression expression)
     {
-        if (grouping is ExpressionGroupingSpecification expressionGrouping &&
-            IsCaseExpression(expressionGrouping.Expression))
+        if (grouping is ExpressionGroupingSpecification expressionGrouping)
         {
             expression = expressionGrouping.Expression;
             return true;
@@ -1134,6 +1260,107 @@ public static class OutputSheetPlanBuilder
 
         expression = null!;
         return false;
+    }
+
+    /// <summary>
+    /// 式の直下にあるCASEを左から取得し、内側のCASEは親へ委ねる
+    /// </summary>
+    private static IReadOnlyList<ScalarExpression> DirectCaseExpressions(TSqlFragment expression)
+    {
+        var cases = CaseExpressionCollector.Collect(expression);
+        return cases
+            .Where(candidate => !cases.Any(other =>
+                !ReferenceEquals(candidate, other) &&
+                ContainsFragment(other, candidate)))
+            .OrderBy(candidate => candidate.StartOffset)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// 外側の式を保ったままCASE本文を結果名へ置換
+    /// </summary>
+    private static string RenderExpressionWithCasePlaceholders(
+        string sql,
+        TSqlFragment expression,
+        IReadOnlyList<ScalarExpression> cases)
+    {
+        var value = DisplayText(sql, expression);
+        for (var index = 0; index < cases.Count; index++)
+        {
+            var placeholder = cases.Count == 1
+                ? "CASE結果"
+                : $"CASE結果{index + 1}";
+            var sourceTexts = new[]
+            {
+                DisplayText(sql, cases[index]),
+                FragmentText(sql, cases[index]),
+                RawFragmentText(sql, cases[index])
+            };
+            foreach (var sourceText in sourceTexts
+                .Where(text => text.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .OrderByDescending(text => text.Length))
+            {
+                value = value.Replace(sourceText, placeholder, StringComparison.Ordinal);
+            }
+        }
+
+        return CompactSqlWhitespace(value);
+    }
+
+    /// <summary>
+    /// リテラル内部を維持し、複数行の外側式だけを1行へ圧縮
+    /// </summary>
+    private static string CompactSqlWhitespace(string value)
+    {
+        var result = new StringBuilder(value.Length);
+        var pendingSpace = false;
+        var inString = false;
+        var inBracket = false;
+        var inQuotedIdentifier = false;
+        for (var index = 0; index < value.Length; index++)
+        {
+            var character = value[index];
+            if (inString || inBracket || inQuotedIdentifier)
+            {
+                result.Append(character);
+                if (inString && character == '\'' || inBracket && character == ']' ||
+                    inQuotedIdentifier && character == '"')
+                {
+                    if (index + 1 < value.Length && value[index + 1] == character)
+                    {
+                        result.Append(value[++index]);
+                    }
+                    else
+                    {
+                        inString = false;
+                        inBracket = false;
+                        inQuotedIdentifier = false;
+                    }
+                }
+                continue;
+            }
+
+            if (char.IsWhiteSpace(character))
+            {
+                pendingSpace = result.Length > 0;
+                continue;
+            }
+
+            if (pendingSpace && result.Length > 0 &&
+                result[^1] != '(' && character != ')' && character != ',' &&
+                result[^1] != '.' && character != '.')
+            {
+                result.Append(' ');
+            }
+            pendingSpace = false;
+            result.Append(character);
+            inString = character == '\'';
+            inBracket = character == '[';
+            inQuotedIdentifier = character == '"';
+        }
+
+        return result.ToString().Trim();
     }
 
     /// <summary>
@@ -1258,7 +1485,7 @@ public static class OutputSheetPlanBuilder
         var valueColumn = connector.Length == 0
             ? layout.FirstValueColumn
             : layout.ConnectedValueColumn;
-        if (TryWriteComparedCase(cells, sql, expression, valueColumn, row, out var consumedRows))
+        if (TryWriteConditionCases(cells, sql, expression, valueColumn, row, out var consumedRows))
         {
             return row + consumedRows;
         }
@@ -1311,9 +1538,9 @@ public static class OutputSheetPlanBuilder
     }
 
     /// <summary>
-    /// CASEを含む比較条件を結果比較と分岐へ展開
+    /// 条件式内のCASEを結果参照と分岐へ展開
     /// </summary>
-    private static bool TryWriteComparedCase(
+    private static bool TryWriteConditionCases(
         ICollection<OutputCell> cells,
         string sql,
         BooleanExpression expression,
@@ -1322,52 +1549,19 @@ public static class OutputSheetPlanBuilder
         out int consumedRows)
     {
         consumedRows = 0;
-        if (expression is not BooleanComparisonExpression comparison)
+        var cases = DirectCaseExpressions(expression);
+        if (cases.Count == 0)
         {
             return false;
         }
 
-        var caseExpression = IsCaseExpression(comparison.FirstExpression)
-            ? comparison.FirstExpression
-            : IsCaseExpression(comparison.SecondExpression)
-                ? comparison.SecondExpression
-                : null;
-        if (caseExpression is null)
-        {
-            return false;
-        }
-
-        var comparedExpression = ReferenceEquals(caseExpression, comparison.FirstExpression)
-            ? comparison.SecondExpression
-            : comparison.FirstExpression;
         cells.Add(new OutputCell(
             row,
             valueColumn,
-            $"CASE結果 {ComparisonOperatorText(comparison.ComparisonType)} {DisplayText(sql, comparedExpression)}"));
+            RenderExpressionWithCasePlaceholders(sql, expression, cases)));
         cells.Add(new OutputCell(row, 31, "※"));
-        consumedRows = WriteCaseBranches(cells, sql, caseExpression, row);
+        consumedRows = WriteEmbeddedCaseBranches(cells, sql, cases, row, 32);
         return true;
-    }
-
-    /// <summary>
-    /// 比較演算子を帳票表示へ変換
-    /// </summary>
-    private static string ComparisonOperatorText(BooleanComparisonType comparisonType)
-    {
-        return comparisonType switch
-        {
-            BooleanComparisonType.GreaterThan => ">",
-            BooleanComparisonType.LessThan => "<",
-            BooleanComparisonType.GreaterThanOrEqualTo => ">=",
-            BooleanComparisonType.LessThanOrEqualTo => "<=",
-            BooleanComparisonType.NotEqualToBrackets => "<>",
-            BooleanComparisonType.NotEqualToExclamation => "!=",
-            BooleanComparisonType.NotLessThan => "!<",
-            BooleanComparisonType.NotGreaterThan => "!>",
-            BooleanComparisonType.IsDistinctFrom => "IS DISTINCT FROM",
-            BooleanComparisonType.IsNotDistinctFrom => "IS NOT DISTINCT FROM",
-            _ => "="
-        };
     }
 
     /// <summary>
@@ -1454,8 +1648,21 @@ public static class OutputSheetPlanBuilder
                     cells.Add(new OutputCell(row, 7, parts[conditionIndex].Connector));
                 }
 
-                cells.Add(new OutputCell(row, 17, DisplayText(sql, parts[conditionIndex].Expression)));
-                row++;
+                if (TryWriteConditionCases(
+                    cells,
+                    sql,
+                    parts[conditionIndex].Expression,
+                    17,
+                    row,
+                    out var consumedRows))
+                {
+                    row += consumedRows;
+                }
+                else
+                {
+                    cells.Add(new OutputCell(row, 17, DisplayText(sql, parts[conditionIndex].Expression)));
+                    row++;
+                }
             }
         }
 
@@ -2178,6 +2385,49 @@ public static class OutputSheetPlanBuilder
 
         fieldName = ResolveOutputFieldName(string.Empty, fieldId, mappings);
         return true;
+    }
+
+    /// <summary>
+    /// 式内のCASEを収集し、サブクエリ内部は別フレームへ委ねる
+    /// </summary>
+    private sealed class CaseExpressionCollector : TSqlFragmentVisitor
+    {
+        private readonly List<ScalarExpression> _items = [];
+
+        /// <summary>
+        /// SQL断片に含まれるCASEを取得
+        /// </summary>
+        public static IReadOnlyList<ScalarExpression> Collect(TSqlFragment fragment)
+        {
+            var collector = new CaseExpressionCollector();
+            fragment.Accept(collector);
+            return collector._items;
+        }
+
+        /// <summary>
+        /// 検索CASEを追加
+        /// </summary>
+        public override void ExplicitVisit(SearchedCaseExpression node)
+        {
+            _items.Add(node);
+            base.ExplicitVisit(node);
+        }
+
+        /// <summary>
+        /// 単純CASEを追加
+        /// </summary>
+        public override void ExplicitVisit(SimpleCaseExpression node)
+        {
+            _items.Add(node);
+            base.ExplicitVisit(node);
+        }
+
+        /// <summary>
+        /// サブクエリ内のCASEを親式から除外
+        /// </summary>
+        public override void ExplicitVisit(ScalarSubquery node)
+        {
+        }
     }
 
     /// <summary>
