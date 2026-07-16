@@ -854,10 +854,10 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
-    /// INSERT SELECTをデータ移送表へ変換することを確認
+    /// INSERT SELECTをSELECT表とデータ移送表のハイブリッドへ変換することを確認
     /// </summary>
     [TestMethod]
-    public void Build_CreatesInsertSelectTransferFrame()
+    public void Build_CreatesInsertSelectHybridFrames()
     {
         const string sql = """
             INSERT INTO user_archive(ユーザーID, 氏名, 状態)
@@ -878,29 +878,41 @@ public sealed class OutputSheetPlanBuilderTests
 
         var plan = OutputSheetPlanBuilder.Build(sql, mappings);
 
-        Assert.AreEqual(7, plan.RowCount);
+        Assert.AreEqual(13, plan.RowCount);
         AssertCells(
             plan,
-            (1, 1, "＜データ移送表＞"),
-            (2, 1, "参照テーブル: ユーザーアーカイブ、ユーザー[tb1]"),
-            (3, 1, "項目"),
-            (3, 19, "移送元"),
-            (3, 37, "移送方法ほか"),
-            (4, 1, "ユーザーID"),
-            (4, 19, "tb1.ユーザーID"),
-            (5, 1, "氏名"),
-            (5, 19, "tb1.氏名"),
-            (6, 1, "状態"),
-            (6, 19, "tb1.状態"),
-            (7, 1, "検索条件"),
-            (7, 17, "tb1.削除日時 < @archive_before"));
+            (1, 1, "サブクエリ[SQ1]"),
+            (2, 1, "参照テーブル: ユーザー[tb1]"),
+            (3, 1, "取得項目"),
+            (3, 7, "取得項目1"),
+            (3, 15, ":"),
+            (3, 17, "tb1.ユーザーID"),
+            (4, 7, "取得項目2"),
+            (4, 15, ":"),
+            (4, 17, "tb1.氏名"),
+            (5, 7, "取得項目3"),
+            (5, 15, ":"),
+            (5, 17, "tb1.状態"),
+            (6, 1, "検索条件"),
+            (6, 17, "tb1.削除日時 < @archive_before"),
+            (8, 1, "＜データ移送表＞"),
+            (9, 1, "参照テーブル: ユーザーアーカイブ、SQ1"),
+            (10, 1, "項目"),
+            (10, 19, "移送元"),
+            (10, 37, "移送方法ほか"),
+            (11, 1, "ユーザーID"),
+            (11, 19, "SQ1.ユーザーID"),
+            (12, 1, "氏名"),
+            (12, 19, "SQ1.氏名"),
+            (13, 1, "状態"),
+            (13, 19, "SQ1.状態"));
     }
 
     /// <summary>
-    /// 複雑なINSERT SELECTを移送元・計算式・集計条件へ分解することを確認
+    /// 複雑なINSERT SELECTの計算と条件をSELECT表へ分離することを確認
     /// </summary>
     [TestMethod]
-    public void Build_CreatesComplexInsertSelectTransferFrame()
+    public void Build_CreatesComplexInsertSelectHybridFrames()
     {
         const string sql = """
             insert into user_summary(ユーザーID, 表示名, 注文件数, 作成日時, 作成元区分)
@@ -934,16 +946,55 @@ public sealed class OutputSheetPlanBuilderTests
         var plan = OutputSheetPlanBuilder.Build(sql, mappings);
 
         Assert.IsFalse(plan.IsFallback);
-        Assert.AreEqual(16, plan.RowCount);
-        Assert.AreEqual("tb1.氏名、tb1.メール", CellValue(plan, 5, 19));
-        Assert.AreEqual("COALESCE(tb1.氏名, tb1.メール) AS display_name", CellValue(plan, 5, 37));
-        Assert.AreEqual("tb2.注文ID", CellValue(plan, 6, 19));
-        Assert.AreEqual("COUNT(tb2.注文ID) AS order_count", CellValue(plan, 6, 37));
-        Assert.AreEqual("sysdatetime()", CellValue(plan, 7, 37));
-        Assert.AreEqual("グループ", CellValue(plan, 13, 1));
-        Assert.AreEqual("tb1.メール", CellValue(plan, 15, 17));
-        Assert.AreEqual("集計条件", CellValue(plan, 16, 1));
-        Assert.AreEqual("COUNT(tb2.注文ID) >= @min_order_count", CellValue(plan, 16, 17));
+        Assert.AreEqual(24, plan.RowCount);
+        Assert.AreEqual("サブクエリ[SQ1]", CellValue(plan, 1, 1));
+        Assert.AreEqual("display_name", CellValue(plan, 4, 17));
+        Assert.AreEqual("COALESCE(tb1.氏名, tb1.メール)", CellValue(plan, 4, 32));
+        Assert.AreEqual("グループ", CellValue(plan, 12, 1));
+        Assert.AreEqual("集計条件", CellValue(plan, 15, 1));
+        Assert.AreEqual("COUNT(tb2.注文ID) >= @min_order_count", CellValue(plan, 15, 17));
+        Assert.AreEqual("＜データ移送表＞", CellValue(plan, 17, 1));
+        Assert.AreEqual("参照テーブル: ユーザー集計、SQ1", CellValue(plan, 18, 1));
+        Assert.AreEqual("SQ1.表示名", CellValue(plan, 21, 19));
+        Assert.AreEqual("SQ1.注文件数", CellValue(plan, 22, 19));
+        Assert.AreEqual("SQ1.作成日時", CellValue(plan, 23, 19));
+        Assert.IsNull(CellValue(plan, 21, 37));
+    }
+
+    /// <summary>
+    /// 単一行のINSERT VALUESを値式付きデータ移送表へ変換することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_CreatesInsertValuesTransferFrame()
+    {
+        const string sql = """
+            INSERT INTO users(ユーザーID, 氏名, 状態, 作成日時)
+            VALUES (@user_id, @name, 'ACTIVE', sysdatetime())
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("users", "ユーザー", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(7, plan.RowCount);
+        AssertCells(
+            plan,
+            (1, 1, "＜データ移送表＞"),
+            (2, 1, "参照テーブル: ユーザー"),
+            (3, 1, "項目"),
+            (3, 19, "移送元"),
+            (3, 37, "移送方法ほか"),
+            (4, 1, "ユーザーID"),
+            (4, 37, "@user_id"),
+            (5, 1, "氏名"),
+            (5, 37, "@name"),
+            (6, 1, "状態"),
+            (6, 37, "'ACTIVE'"),
+            (7, 1, "作成日時"),
+            (7, 37, "sysdatetime()"));
     }
 
     /// <summary>
@@ -1071,6 +1122,52 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
+    /// EXISTSを含むDELETEをサブクエリ表とデータ移送表へ分離することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_CreatesDeleteExistsHybridFrames()
+    {
+        const string sql = """
+            DELETE tb1
+            FROM
+                users AS tb1
+            WHERE
+                EXISTS (
+                    SELECT
+                        1
+                    FROM
+                        orders AS tb2
+                    WHERE
+                        tb2.注文ユーザーID = tb1.ユーザーID
+                )
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "ユーザー", "", ""),
+            new("tb2", "注文", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(8, plan.RowCount);
+        AssertCells(
+            plan,
+            (1, 1, "サブクエリ[SQ1]"),
+            (2, 1, "参照テーブル: ユーザー[tb1]、注文[tb2]"),
+            (3, 1, "取得項目"),
+            (3, 7, "取得項目1"),
+            (3, 15, ":"),
+            (3, 17, "1"),
+            (4, 1, "検索条件"),
+            (4, 17, "tb2.注文ユーザーID = tb1.ユーザーID"),
+            (6, 1, "＜データ移送表＞"),
+            (7, 1, "参照テーブル: ユーザー[tb1]、SQ1"),
+            (8, 1, "検索条件"),
+            (8, 17, "EXISTS (SQ1)"));
+    }
+
+    /// <summary>
     /// UPDATE FROMを移送・結合・条件表へ変換することを確認
     /// </summary>
     [TestMethod]
@@ -1143,6 +1240,111 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
+    /// UPDATE SETのスカラーサブクエリをSELECT表とSQ参照へ分離することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_CreatesUpdateSetSubqueryHybridFrames()
+    {
+        const string sql = """
+            UPDATE tb1
+            SET
+                最終注文金額 = (
+                    SELECT
+                        TOP(1) tb2.金額
+                    FROM
+                        orders AS tb2
+                    WHERE
+                        tb2.注文ユーザーID = tb1.ユーザーID
+                    ORDER BY
+                        tb2.注文日時 DESC
+                )
+            FROM
+                users AS tb1
+            WHERE
+                tb1.状態 = 'ACTIVE'
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "ユーザー", "", ""),
+            new("tb2", "注文", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(12, plan.RowCount);
+        AssertCells(
+            plan,
+            (1, 1, "サブクエリ[SQ1]"),
+            (2, 1, "参照テーブル: ユーザー[tb1]、注文[tb2]"),
+            (3, 1, "取得件数"),
+            (3, 7, "1"),
+            (4, 1, "取得項目"),
+            (4, 7, "取得項目1"),
+            (4, 15, ":"),
+            (4, 17, "tb2.金額"),
+            (5, 1, "検索条件"),
+            (5, 17, "tb2.注文ユーザーID = tb1.ユーザーID"),
+            (6, 1, "並び順"),
+            (6, 7, "ソートキー1"),
+            (6, 15, ":"),
+            (6, 17, "tb2.注文日時(降順)"),
+            (8, 1, "＜データ移送表＞"),
+            (9, 1, "参照テーブル: ユーザー[tb1]、SQ1"),
+            (10, 1, "項目"),
+            (10, 19, "移送元"),
+            (10, 37, "移送方法ほか"),
+            (11, 1, "最終注文金額"),
+            (11, 19, "SQ1.金額"),
+            (12, 1, "検索条件"),
+            (12, 17, "tb1.状態 = 'ACTIVE'"));
+    }
+
+    /// <summary>
+    /// 派生SELECT付きUPDATEを派生表とデータ移送表へ分離することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_CreatesUpdateDerivedSelectHybridFrames()
+    {
+        const string sql = """
+            UPDATE tb1
+            SET
+                状態 = sq.最新状態
+            FROM
+                users AS tb1
+                INNER JOIN (
+                    SELECT
+                        tb2.注文ユーザーID
+                        , MAX(tb2.状態) AS 最新状態
+                    FROM
+                        order_status_history AS tb2
+                    GROUP BY
+                        tb2.注文ユーザーID
+                ) AS sq
+                    ON tb1.ユーザーID = sq.注文ユーザーID
+            WHERE
+                tb1.状態 = 'ACTIVE'
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "ユーザー", "", ""),
+            new("tb2", "注文状態履歴", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("サブクエリ[sq]", CellValue(plan, 1, 1));
+        Assert.AreEqual("参照テーブル: 注文状態履歴[tb2]", CellValue(plan, 2, 1));
+        Assert.AreEqual("＜データ移送表＞", CellValue(plan, 7, 1));
+        Assert.AreEqual("参照テーブル: ユーザー[tb1]、sq", CellValue(plan, 8, 1));
+        Assert.AreEqual("sq.最新状態", CellValue(plan, 10, 19));
+        Assert.AreEqual("＜ユーザー[tb1] INNER JOIN sq＞", CellValue(plan, 11, 17));
+        Assert.AreEqual("tb1.ユーザーID = sq.注文ユーザーID", CellValue(plan, 12, 17));
+        Assert.AreEqual("tb1.状態 = 'ACTIVE'", CellValue(plan, 13, 17));
+    }
+
+    /// <summary>
     /// 一時テーブルの物理名から和名を解決することを確認
     /// </summary>
     [TestMethod]
@@ -1166,23 +1368,23 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
-    /// 未対応SQLを行単位で出力しフォールバック原因を添えることを確認
+    /// 未対応のINSERT EXECUTEを行単位で出力しフォールバック原因を添えることを確認
     /// </summary>
     [TestMethod]
-    public void Build_WritesUnsupportedSqlByLineWithFallbackReason()
+    public void Build_WritesUnsupportedInsertExecuteByLineWithFallbackReason()
     {
-        const string sql = "INSERT INTO users (id)\r\nVALUES (1)";
+        const string sql = "INSERT INTO users (id)\r\nEXEC dbo.GetUserIds";
 
         var plan = OutputSheetPlanBuilder.Build(sql, []);
 
         Assert.IsTrue(plan.IsFallback);
-        Assert.AreEqual("未対応のINSERT形式: VALUES", plan.FallbackReason);
+        Assert.AreEqual("未対応のINSERT形式: EXECUTE", plan.FallbackReason);
         Assert.AreEqual(4, plan.RowCount);
         AssertCells(
             plan,
             (1, 1, "INSERT INTO users (id)"),
-            (2, 1, "VALUES (1)"),
-            (4, 1, "フォールバック原因: 未対応のINSERT形式: VALUES（対象クエリ: アウトプットシート 1～2行目）"));
+            (2, 1, "EXEC dbo.GetUserIds"),
+            (4, 1, "フォールバック原因: 未対応のINSERT形式: EXECUTE（対象クエリ: アウトプットシート 1～2行目）"));
     }
 
     /// <summary>

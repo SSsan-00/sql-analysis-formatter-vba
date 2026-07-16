@@ -9,7 +9,7 @@ namespace SqlAnalysisFormatter.Parser;
 /// </summary>
 internal static class Program
 {
-    private const string VersionText = "SqlAnalysisFormatter.Parser 0.3.1";
+    private const string VersionText = "SqlAnalysisFormatter.Parser 0.4.0";
 
     /// <summary>
     /// SQLを読み取り、指定形式の解析結果を書き出す

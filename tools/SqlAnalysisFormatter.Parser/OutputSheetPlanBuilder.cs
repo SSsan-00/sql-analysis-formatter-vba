@@ -131,15 +131,15 @@ public static class OutputSheetPlanBuilder
     }
 
     /// <summary>
-    /// SELECT文内のサブクエリを内側から共通の描画計画へ変換
+    /// SQL断片内のサブクエリを内側から共通の描画計画へ変換
     /// </summary>
     private static (IReadOnlyList<SubqueryInfo> Subqueries, List<OutputSheetPlan> Plans)
         BuildLeadingSubqueryPlans(
             string sql,
-            SelectStatement statement,
+            TSqlFragment fragment,
             IReadOnlyList<MappingDefinition> mappings)
     {
-        var subqueries = SubqueryCollector.Collect(statement);
+        var subqueries = SubqueryCollector.Collect(fragment);
         var plans = new List<OutputSheetPlan>(subqueries.Count + 1);
         foreach (var subquery in subqueries)
         {
@@ -255,7 +255,7 @@ public static class OutputSheetPlanBuilder
     }
 
     /// <summary>
-    /// INSERT SELECTをデータ移送表へ変換
+    /// INSERTの入力形式に応じた描画計画を作成
     /// </summary>
     private static OutputSheetPlan BuildInsert(
         string sql,
@@ -263,43 +263,144 @@ public static class OutputSheetPlanBuilder
         IReadOnlyList<MappingDefinition> mappings)
     {
         var specification = statement.InsertSpecification;
-        if (specification.InsertSource is not SelectInsertSource selectSource)
+        return specification.InsertSource switch
+        {
+            SelectInsertSource selectSource => BuildInsertSelect(
+                sql,
+                statement,
+                specification,
+                selectSource,
+                mappings),
+            ValuesInsertSource valuesSource => BuildInsertValues(
+                sql,
+                specification,
+                valuesSource,
+                mappings),
+            _ => CreateFallback(
+                sql,
+                "未対応のINSERT形式: " + InsertSourceKind(specification.InsertSource))
+        };
+    }
+
+    /// <summary>
+    /// INSERT SELECTをSELECT表とデータ移送表のハイブリッドへ変換
+    /// </summary>
+    private static OutputSheetPlan BuildInsertSelect(
+        string sql,
+        InsertStatement statement,
+        InsertSpecification specification,
+        SelectInsertSource selectSource,
+        IReadOnlyList<MappingDefinition> mappings)
+    {
+        var sourceExpression = UnwrapQueryExpression(selectSource.Select);
+        if (sourceExpression is not QuerySpecification sourceQuery)
+        {
+            return CreateFallback(sql, "未対応のINSERT形式: SELECTの集合演算", selectSource.Select);
+        }
+
+        if (specification.Columns.Count != sourceQuery.SelectElements.Count)
         {
             return CreateFallback(
                 sql,
-                "未対応のINSERT形式: " + InsertSourceKind(specification.InsertSource));
+                "INSERT SELECTの対象列数と取得項目数が一致しません",
+                selectSource.Select);
         }
 
-        if (UnwrapQueryExpression(selectSource.Select) is not QuerySpecification sourceQuery)
+        var (subqueries, plans) = BuildLeadingSubqueryPlans(sql, statement, mappings);
+        var sourceName = NextGeneratedSubqueryName(subqueries);
+        var sourceChildren = DirectChildSubqueries(sourceQuery, subqueries);
+        var sourcePlan = BuildSelect(
+            sql,
+            sourceQuery,
+            mappings,
+            $"サブクエリ[{sourceName}]",
+            sourceChildren.Where(child => !child.IsNamed).Select(child => child.Name));
+        plans.Add(ReplaceSubqueries(sourcePlan, sql, sourceChildren));
+
+        var transfers = specification.Columns
+            .Select(column => FragmentText(sql, column))
+            .Select(target => new TransferItem(target, $"{sourceName}.{target}", string.Empty))
+            .ToArray();
+        var targetDisplay = BuildTargetTableDisplay(
+            specification.Target,
+            mappings,
+            includeIdentifier: false);
+        plans.Add(BuildDataTransferPlan(
+            sql,
+            $"{targetDisplay}、{sourceName}",
+            transfers,
+            null,
+            null,
+            mappings));
+
+        return CombinePlans(plans);
+    }
+
+    /// <summary>
+    /// 単一行のINSERT VALUESをデータ移送表へ変換
+    /// </summary>
+    private static OutputSheetPlan BuildInsertValues(
+        string sql,
+        InsertSpecification specification,
+        ValuesInsertSource valuesSource,
+        IReadOnlyList<MappingDefinition> mappings)
+    {
+        if (valuesSource.IsDefaultValues)
         {
-            return CreateFallback(sql, "未対応のINSERT形式: SELECTの集合演算");
+            return CreateFallback(sql, "未対応のINSERT形式: DEFAULT VALUES", valuesSource);
         }
 
-        var targetDisplay = BuildTargetTableDisplay(specification.Target, mappings, includeIdentifier: false);
-        var sourceTables = BuildTableList(sourceQuery, mappings, []);
-        var references = sourceTables == "なし"
-            ? targetDisplay
-            : targetDisplay + "、" + sourceTables;
-        var transferCount = Math.Min(specification.Columns.Count, sourceQuery.SelectElements.Count);
-        var transfers = new List<TransferItem>(transferCount);
-        for (var index = 0; index < transferCount; index++)
+        if (valuesSource.RowValues.Count != 1)
         {
-            transfers.Add(CreateInsertTransferItem(
+            return CreateFallback(sql, "INSERT VALUESの複数行入力は未対応", valuesSource);
+        }
+
+        var values = valuesSource.RowValues[0].ColumnValues;
+        if (specification.Columns.Count == 0 || specification.Columns.Count != values.Count)
+        {
+            return CreateFallback(
                 sql,
-                FragmentText(sql, specification.Columns[index]),
-                sourceQuery.SelectElements[index]));
+                "INSERT VALUESの対象列数と値数が一致しません",
+                valuesSource);
         }
 
+        var transfers = new List<TransferItem>(values.Count);
+        for (var index = 0; index < values.Count; index++)
+        {
+            transfers.Add(CreateTransferItem(
+                FragmentText(sql, specification.Columns[index]),
+                FragmentText(sql, values[index]),
+                values[index]));
+        }
+
+        var targetDisplay = BuildTargetTableDisplay(
+            specification.Target,
+            mappings,
+            includeIdentifier: false);
         return BuildDataTransferPlan(
             sql,
-            references,
+            targetDisplay,
             transfers,
-            sourceQuery.FromClause,
-            sourceQuery.WhereClause,
-            mappings,
-            sourceQuery.GroupByClause,
-            sourceQuery.HavingClause,
-            sourceQuery);
+            null,
+            null,
+            mappings);
+    }
+
+    /// <summary>
+    /// 既存名と重複しない次のSQ名を取得
+    /// </summary>
+    private static string NextGeneratedSubqueryName(IReadOnlyList<SubqueryInfo> subqueries)
+    {
+        var names = subqueries
+            .Select(subquery => subquery.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var index = subqueries.Count + 1;
+        while (names.Contains($"SQ{index}"))
+        {
+            index++;
+        }
+
+        return $"SQ{index}";
     }
 
     /// <summary>
@@ -311,19 +412,26 @@ public static class OutputSheetPlanBuilder
         IReadOnlyList<MappingDefinition> mappings)
     {
         var specification = statement.DeleteSpecification;
-        var references = BuildTableList(specification.FromClause, mappings, []);
+        var (subqueries, plans) = BuildLeadingSubqueryPlans(sql, statement, mappings);
+        var directChildren = DirectChildSubqueries(specification, subqueries);
+        var references = BuildTableList(
+            specification.FromClause,
+            mappings,
+            directChildren.Select(child => child.Name));
         if (references == "なし")
         {
             references = BuildTargetTableDisplay(specification.Target, mappings, includeIdentifier: true);
         }
 
-        return BuildDataTransferPlan(
+        var transferPlan = BuildDataTransferPlan(
             sql,
             references,
             [],
             specification.FromClause,
             specification.WhereClause,
             mappings);
+        plans.Add(ReplaceSubqueries(transferPlan, sql, directChildren));
+        return CombinePlans(plans);
     }
 
     /// <summary>
@@ -335,7 +443,12 @@ public static class OutputSheetPlanBuilder
         IReadOnlyList<MappingDefinition> mappings)
     {
         var specification = statement.UpdateSpecification;
-        var references = BuildTableList(specification.FromClause, mappings, []);
+        var (subqueries, plans) = BuildLeadingSubqueryPlans(sql, statement, mappings);
+        var directChildren = DirectChildSubqueries(specification, subqueries);
+        var references = BuildTableList(
+            specification.FromClause,
+            mappings,
+            directChildren.Select(child => child.Name));
         if (references == "なし")
         {
             references = BuildTargetTableDisplay(specification.Target, mappings, includeIdentifier: true);
@@ -344,18 +457,21 @@ public static class OutputSheetPlanBuilder
         var transfers = specification.SetClauses
             .OfType<AssignmentSetClause>()
             .Where(clause => clause.Column is not null)
-            .Select(clause => CreateTransferItem(
-                FragmentText(sql, clause.Column),
-                FragmentText(sql, clause.NewValue),
-                clause.NewValue))
+            .Select(clause => CreateUpdateTransferItem(
+                sql,
+                clause,
+                directChildren,
+                mappings))
             .ToArray();
-        return BuildDataTransferPlan(
+        var transferPlan = BuildDataTransferPlan(
             sql,
             references,
             transfers,
             specification.FromClause,
             specification.WhereClause,
             mappings);
+        plans.Add(ReplaceSubqueries(transferPlan, sql, directChildren));
+        return CombinePlans(plans);
     }
 
     /// <summary>
@@ -560,7 +676,7 @@ public static class OutputSheetPlanBuilder
     /// 親クエリから直接参照されるサブクエリだけを取得
     /// </summary>
     private static IReadOnlyList<SubqueryInfo> DirectChildSubqueries(
-        QueryExpression parent,
+        TSqlFragment parent,
         IReadOnlyList<SubqueryInfo> subqueries)
     {
         return subqueries
@@ -1988,42 +2104,70 @@ public static class OutputSheetPlanBuilder
     }
 
     /// <summary>
-    /// INSERT SELECTの式を参照列と計算方法へ分解
+    /// UPDATE SETの直接スカラーサブクエリをSQ参照へ変換
     /// </summary>
-    private static TransferItem CreateInsertTransferItem(
+    private static TransferItem CreateUpdateTransferItem(
         string sql,
-        string target,
-        SelectElement element)
+        AssignmentSetClause clause,
+        IReadOnlyList<SubqueryInfo> directSubqueries,
+        IReadOnlyList<MappingDefinition> mappings)
     {
-        if (element is not SelectScalarExpression scalar)
+        var target = FragmentText(sql, clause.Column);
+        if (clause.NewValue is ScalarSubquery scalarSubquery)
         {
-            return CreateTransferItem(
-                target,
-                RenderSelectElement(sql, element),
-                element);
+            var subquery = directSubqueries.FirstOrDefault(candidate =>
+                ReferenceEquals(candidate.QueryExpression, scalarSubquery.QueryExpression));
+            if (subquery is not null &&
+                TryResolveSingleSelectFieldName(
+                    sql,
+                    scalarSubquery.QueryExpression,
+                    mappings,
+                    out var fieldName))
+            {
+                return new TransferItem(target, $"{subquery.Name}.{fieldName}", string.Empty);
+            }
         }
 
-        var columns = ColumnReferenceCollector.Collect(scalar.Expression)
-            .Select(column => DisplayText(sql, column))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (scalar.Expression is ColumnReferenceExpression)
+        return CreateTransferItem(
+            target,
+            FragmentText(sql, clause.NewValue),
+            clause.NewValue);
+    }
+
+    /// <summary>
+    /// 単一取得項目の出力名を列名または別名から解決
+    /// </summary>
+    private static bool TryResolveSingleSelectFieldName(
+        string sql,
+        QueryExpression expression,
+        IReadOnlyList<MappingDefinition> mappings,
+        out string fieldName)
+    {
+        fieldName = string.Empty;
+        if (UnwrapQueryExpression(expression) is not QuerySpecification query ||
+            query.SelectElements.Count != 1 ||
+            query.SelectElements[0] is not SelectScalarExpression scalar)
         {
-            return new TransferItem(target, columns.FirstOrDefault() ?? string.Empty, string.Empty);
+            return false;
         }
 
-        if (columns.Length == 0)
-        {
-            return new TransferItem(target, string.Empty, RawFragmentText(sql, scalar.Expression));
-        }
-
-        var method = DisplayText(sql, scalar.Expression);
+        string fieldId;
         if (scalar.ColumnName is not null)
         {
-            method += " AS " + FragmentText(sql, scalar.ColumnName);
+            fieldId = FragmentText(sql, scalar.ColumnName);
+        }
+        else if (scalar.Expression is ColumnReferenceExpression column &&
+            column.MultiPartIdentifier?.Identifiers.Count > 0)
+        {
+            fieldId = column.MultiPartIdentifier.Identifiers[^1].Value;
+        }
+        else
+        {
+            return false;
         }
 
-        return new TransferItem(target, string.Join("、", columns), method);
+        fieldName = ResolveOutputFieldName(string.Empty, fieldId, mappings);
+        return true;
     }
 
     /// <summary>
@@ -2035,12 +2179,12 @@ public static class OutputSheetPlanBuilder
         private readonly HashSet<(int StartOffset, int Length)> _seen = [];
 
         /// <summary>
-        /// SELECT文から出力対象サブクエリを収集
+        /// SQL断片から出力対象サブクエリを収集
         /// </summary>
-        public static IReadOnlyList<SubqueryInfo> Collect(SelectStatement statement)
+        public static IReadOnlyList<SubqueryInfo> Collect(TSqlFragment fragment)
         {
             var collector = new SubqueryCollector();
-            statement.Accept(collector);
+            fragment.Accept(collector);
             return collector._items;
         }
 
@@ -2129,39 +2273,6 @@ public static class OutputSheetPlanBuilder
         public override void ExplicitVisit(ColumnReferenceExpression node)
         {
             Found = true;
-        }
-    }
-
-    /// <summary>
-    /// 式が直接参照する列ASTを出現順に収集
-    /// </summary>
-    private sealed class ColumnReferenceCollector : TSqlFragmentVisitor
-    {
-        private readonly List<ColumnReferenceExpression> _columns = [];
-
-        /// <summary>
-        /// 式から列参照を収集
-        /// </summary>
-        public static IReadOnlyList<ColumnReferenceExpression> Collect(TSqlFragment expression)
-        {
-            var collector = new ColumnReferenceCollector();
-            expression.Accept(collector);
-            return collector._columns;
-        }
-
-        /// <summary>
-        /// 列参照を追加
-        /// </summary>
-        public override void ExplicitVisit(ColumnReferenceExpression node)
-        {
-            _columns.Add(node);
-        }
-
-        /// <summary>
-        /// 式内サブクエリの列を移送元から除外
-        /// </summary>
-        public override void ExplicitVisit(ScalarSubquery node)
-        {
         }
     }
 

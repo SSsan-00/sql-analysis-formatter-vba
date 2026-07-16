@@ -265,7 +265,7 @@ Public Sub AnalyzeQueries_PreservesLeadingApostropheInOutput()
 
     AnalyzeQueries False
 
-    AssertCellValue wsOutput.Cells(4, 37), "'BATCH'"
+    AssertCellValue wsOutput.Cells(3, 17), "'BATCH'"
 End Sub
 
 '@TestMethod("AnalyzeQueries")
