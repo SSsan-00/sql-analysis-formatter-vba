@@ -719,6 +719,87 @@
         { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "user_id", "field_name_ja": "ユーザーID" },
         { "table_id": "tb2", "table_name_ja": "注文", "field_id": "user_id", "field_name_ja": "注文ユーザーID" }
       ]
+    },
+    {
+      "id": "SEL-065",
+      "title": "UPDATE検索条件のEXISTS",
+      "review_status": "暫定確定（ユーザーレビュー未実施）",
+      "sql_lines": [
+        "update users ",
+        "set",
+        "    status = 'INACTIVE' ",
+        "where",
+        "    exists ( ",
+        "        select",
+        "            1 ",
+        "        from",
+        "            orders as tb2 ",
+        "        where",
+        "            tb2.user_id = users.user_id ",
+        "            and tb2.status = 'CANCELLED'",
+        "    )"
+      ],
+      "definitions": [
+        { "table_id": "users", "table_name_ja": "ユーザー", "field_id": "user_id", "field_name_ja": "ユーザーID" },
+        { "table_id": "-", "table_name_ja": "ユーザー", "field_id": "status", "field_name_ja": "状態" },
+        { "table_id": "tb2", "table_name_ja": "注文", "field_id": "user_id", "field_name_ja": "注文ユーザーID" },
+        { "table_id": "tb2", "table_name_ja": "注文", "field_id": "status", "field_name_ja": "状態" }
+      ]
+    },
+    {
+      "id": "SEL-066",
+      "title": "UPDATE検索条件のスカラーサブクエリ",
+      "review_status": "暫定確定（ユーザーレビュー未実施）",
+      "sql_lines": [
+        "update tb1 ",
+        "set",
+        "    status = 'REVIEW' ",
+        "from",
+        "    users as tb1 ",
+        "where",
+        "    tb1.amount > ( ",
+        "        select",
+        "            avg(tb2.amount) as average_amount ",
+        "        from",
+        "            orders as tb2 ",
+        "        where",
+        "            tb2.user_id = tb1.user_id",
+        "    )"
+      ],
+      "definitions": [
+        { "table_id": "-", "table_name_ja": "ユーザー", "field_id": "status", "field_name_ja": "状態" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "amount", "field_name_ja": "金額" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "user_id", "field_name_ja": "ユーザーID" },
+        { "table_id": "tb2", "table_name_ja": "注文", "field_id": "amount", "field_name_ja": "金額" },
+        { "table_id": "tb2", "table_name_ja": "注文", "field_id": "user_id", "field_name_ja": "注文ユーザーID" }
+      ]
+    },
+    {
+      "id": "SEL-067",
+      "title": "UPDATE検索条件のINサブクエリ",
+      "review_status": "暫定確定（ユーザーレビュー未実施）",
+      "sql_lines": [
+        "update tb1 ",
+        "set",
+        "    status = 'ARCHIVED' ",
+        "from",
+        "    users as tb1 ",
+        "where",
+        "    tb1.user_id in ( ",
+        "        select",
+        "            tb2.user_id ",
+        "        from",
+        "            orders as tb2 ",
+        "        where",
+        "            tb2.created_at < @cutoff",
+        "    )"
+      ],
+      "definitions": [
+        { "table_id": "-", "table_name_ja": "ユーザー", "field_id": "status", "field_name_ja": "状態" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "user_id", "field_name_ja": "ユーザーID" },
+        { "table_id": "tb2", "table_name_ja": "注文", "field_id": "user_id", "field_name_ja": "注文ユーザーID" },
+        { "table_id": "tb2", "table_name_ja": "注文", "field_id": "created_at", "field_name_ja": "注文日時" }
+      ]
     }
   ]
 }
