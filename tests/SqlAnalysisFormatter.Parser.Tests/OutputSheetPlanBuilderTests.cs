@@ -792,6 +792,56 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
+    /// 複雑なINSERT SELECTを移送元・計算式・集計条件へ分解することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_CreatesComplexInsertSelectTransferFrame()
+    {
+        const string sql = """
+            insert into user_summary(ユーザーID, 表示名, 注文件数, 作成日時, 作成元区分)
+            select
+                tb1.ユーザーID
+                , coalesce(tb1.氏名, tb1.メール) as display_name
+                , count(tb2.注文ID) as order_count
+                , sysdatetime()
+                , 'BATCH'
+            from
+                users as tb1
+                left join orders as tb2
+                    on tb1.ユーザーID = tb2.注文ユーザーID
+                    and tb2.状態 = 'PAID'
+            where
+                tb1.状態 = 'ACTIVE'
+            group by
+                tb1.ユーザーID
+                , tb1.氏名
+                , tb1.メール
+            having
+                count(tb2.注文ID) >= @min_order_count
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("user_summary", "ユーザー集計", "", ""),
+            new("tb1", "ユーザー", "", ""),
+            new("tb2", "注文", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(16, plan.RowCount);
+        Assert.AreEqual("tb1.氏名、tb1.メール", CellValue(plan, 5, 19));
+        Assert.AreEqual("COALESCE(tb1.氏名, tb1.メール) AS display_name", CellValue(plan, 5, 37));
+        Assert.AreEqual("tb2.注文ID", CellValue(plan, 6, 19));
+        Assert.AreEqual("COUNT(tb2.注文ID) AS order_count", CellValue(plan, 6, 37));
+        Assert.AreEqual("sysdatetime()", CellValue(plan, 7, 37));
+        Assert.AreEqual("グループ", CellValue(plan, 13, 1));
+        Assert.AreEqual("tb1.メール", CellValue(plan, 15, 17));
+        Assert.AreEqual("集計条件", CellValue(plan, 16, 1));
+        Assert.AreEqual("COUNT(tb2.注文ID) >= @min_order_count", CellValue(plan, 16, 17));
+    }
+
+    /// <summary>
     /// DELETEを移送行なしの条件表へ変換することを確認
     /// </summary>
     [TestMethod]

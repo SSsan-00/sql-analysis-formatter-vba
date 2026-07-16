@@ -112,9 +112,9 @@ public static class OutputSheetPlanBuilder
         var transfers = new List<TransferItem>(transferCount);
         for (var index = 0; index < transferCount; index++)
         {
-            transfers.Add(CreateTransferItem(
+            transfers.Add(CreateInsertTransferItem(
+                sql,
                 FragmentText(sql, specification.Columns[index]),
-                RenderSelectElement(sql, sourceQuery.SelectElements[index]),
                 sourceQuery.SelectElements[index]));
         }
 
@@ -124,7 +124,10 @@ public static class OutputSheetPlanBuilder
             transfers,
             sourceQuery.FromClause,
             sourceQuery.WhereClause,
-            mappings);
+            mappings,
+            sourceQuery.GroupByClause,
+            sourceQuery.HavingClause,
+            sourceQuery);
     }
 
     /// <summary>
@@ -192,7 +195,10 @@ public static class OutputSheetPlanBuilder
         IReadOnlyList<TransferItem> transfers,
         FromClause? fromClause,
         WhereClause? whereClause,
-        IReadOnlyList<MappingDefinition> mappings)
+        IReadOnlyList<MappingDefinition> mappings,
+        GroupByClause? groupByClause = null,
+        HavingClause? havingClause = null,
+        QuerySpecification? groupingQuery = null)
     {
         var cells = new List<OutputCell>
         {
@@ -232,6 +238,11 @@ public static class OutputSheetPlanBuilder
         if (whereClause is not null)
         {
             WriteConditionSection(cells, sections, sql, "検索条件", whereClause.SearchCondition, ref row);
+        }
+        WriteGroupBySection(cells, sections, sql, groupByClause, groupingQuery, ref row);
+        if (havingClause is not null)
+        {
+            WriteConditionSection(cells, sections, sql, "集計条件", havingClause.SearchCondition, ref row);
         }
 
         return new OutputSheetPlan(cells, sections, row - 1, false);
@@ -575,36 +586,7 @@ public static class OutputSheetPlanBuilder
             WriteConditionSection(cells, sections, sql, "検索条件", query.WhereClause.SearchCondition, ref row);
         }
 
-        if (query.GroupByClause is not null)
-        {
-            var startRow = row;
-            for (var index = 0; index < query.GroupByClause.GroupingSpecifications.Count; index++)
-            {
-                if (index == 0)
-                {
-                    cells.Add(new OutputCell(row, 1, "グループ"));
-                }
-
-                cells.Add(new OutputCell(row, 7, $"グループキー{index + 1}"));
-                cells.Add(new OutputCell(row, 15, ":"));
-                var grouping = query.GroupByClause.GroupingSpecifications[index];
-                if (TryGetGroupingCase(grouping, out var groupingCase))
-                {
-                    cells.Add(new OutputCell(
-                        row,
-                        17,
-                        FindSelectAlias(sql, query, groupingCase) ?? "CASE結果"));
-                    cells.Add(new OutputCell(row, 31, "※"));
-                    row += WriteCaseBranches(cells, sql, groupingCase, row);
-                }
-                else
-                {
-                    cells.Add(new OutputCell(row, 17, RenderGrouping(sql, grouping)));
-                    row++;
-                }
-            }
-            sections.Add(new OutputSection(OutputSectionKind.Standard, startRow, row - 1));
-        }
+        WriteGroupBySection(cells, sections, sql, query.GroupByClause, query, ref row);
 
         if (query.HavingClause is not null)
         {
@@ -650,6 +632,53 @@ public static class OutputSheetPlanBuilder
             sections,
             row - 1,
             false);
+    }
+
+    /// <summary>
+    /// GROUP BY要素をSELECT系と更新系に共通のレイアウトで追加
+    /// </summary>
+    private static void WriteGroupBySection(
+        ICollection<OutputCell> cells,
+        ICollection<OutputSection> sections,
+        string sql,
+        GroupByClause? groupByClause,
+        QuerySpecification? query,
+        ref int row)
+    {
+        if (groupByClause is null)
+        {
+            return;
+        }
+
+        var startRow = row;
+        for (var index = 0; index < groupByClause.GroupingSpecifications.Count; index++)
+        {
+            if (index == 0)
+            {
+                cells.Add(new OutputCell(row, 1, "グループ"));
+            }
+
+            cells.Add(new OutputCell(row, 7, $"グループキー{index + 1}"));
+            cells.Add(new OutputCell(row, 15, ":"));
+            var grouping = groupByClause.GroupingSpecifications[index];
+            if (TryGetGroupingCase(grouping, out var groupingCase))
+            {
+                cells.Add(new OutputCell(
+                    row,
+                    17,
+                    query is null
+                        ? "CASE結果"
+                        : FindSelectAlias(sql, query, groupingCase) ?? "CASE結果"));
+                cells.Add(new OutputCell(row, 31, "※"));
+                row += WriteCaseBranches(cells, sql, groupingCase, row);
+            }
+            else
+            {
+                cells.Add(new OutputCell(row, 17, RenderGrouping(sql, grouping)));
+                row++;
+            }
+        }
+        sections.Add(new OutputSection(OutputSectionKind.Standard, startRow, row - 1));
     }
 
     /// <summary>
@@ -1740,6 +1769,45 @@ public static class OutputSheetPlanBuilder
     }
 
     /// <summary>
+    /// INSERT SELECTの式を参照列と計算方法へ分解
+    /// </summary>
+    private static TransferItem CreateInsertTransferItem(
+        string sql,
+        string target,
+        SelectElement element)
+    {
+        if (element is not SelectScalarExpression scalar)
+        {
+            return CreateTransferItem(
+                target,
+                RenderSelectElement(sql, element),
+                element);
+        }
+
+        var columns = ColumnReferenceCollector.Collect(scalar.Expression)
+            .Select(column => DisplayText(sql, column))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (scalar.Expression is ColumnReferenceExpression)
+        {
+            return new TransferItem(target, columns.FirstOrDefault() ?? string.Empty, string.Empty);
+        }
+
+        if (columns.Length == 0)
+        {
+            return new TransferItem(target, string.Empty, RawFragmentText(sql, scalar.Expression));
+        }
+
+        var method = DisplayText(sql, scalar.Expression);
+        if (scalar.ColumnName is not null)
+        {
+            method += " AS " + FragmentText(sql, scalar.ColumnName);
+        }
+
+        return new TransferItem(target, string.Join("、", columns), method);
+    }
+
+    /// <summary>
     /// サブクエリを内側から収集し、出力名を割り当てる
     /// </summary>
     private sealed class SubqueryCollector : TSqlFragmentVisitor
@@ -1842,6 +1910,39 @@ public static class OutputSheetPlanBuilder
         public override void ExplicitVisit(ColumnReferenceExpression node)
         {
             Found = true;
+        }
+    }
+
+    /// <summary>
+    /// 式が直接参照する列ASTを出現順に収集
+    /// </summary>
+    private sealed class ColumnReferenceCollector : TSqlFragmentVisitor
+    {
+        private readonly List<ColumnReferenceExpression> _columns = [];
+
+        /// <summary>
+        /// 式から列参照を収集
+        /// </summary>
+        public static IReadOnlyList<ColumnReferenceExpression> Collect(TSqlFragment expression)
+        {
+            var collector = new ColumnReferenceCollector();
+            expression.Accept(collector);
+            return collector._columns;
+        }
+
+        /// <summary>
+        /// 列参照を追加
+        /// </summary>
+        public override void ExplicitVisit(ColumnReferenceExpression node)
+        {
+            _columns.Add(node);
+        }
+
+        /// <summary>
+        /// 式内サブクエリの列を移送元から除外
+        /// </summary>
+        public override void ExplicitVisit(ScalarSubquery node)
+        {
         }
     }
 
