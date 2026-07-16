@@ -42,6 +42,10 @@ powershell -ExecutionPolicy Bypass -File tools/run-output-golden-tests.ps1 -Meas
 書式は`SqlAnalysisFormatterGoldenTests.bas`によりExcel内部で比較します。最初のケースでは意図的な書式差分を検知できることも自己診断します。
 機能追加は、失敗するテストを先に追加し、最小実装で成功させ、全回帰テストを維持したまま整理する TDD サイクルで進めます。
 
+フィールド和名は、VBAがB列用SQLとは別にparser専用IDへ置換してから外部parserへ渡します。parserは描画計画の作成後に専用IDを元の和名へ一度だけ復元します。これにより、和名中のT-SQL構文文字をASTへ解釈させず、B列の表示仕様も維持します。
+変換定義プロトコルはparser専用IDを含む`SAF_MAPPINGS 2`です。C#側は旧`.bas`との互換性のため`SAF_MAPPINGS 1`も読み込みます。
+A列`-`のB列テーブル和名は、FROM内の実テーブルが1件かつ有効な和名が1種類の場合だけ参照テーブルのフォールバックへ使用します。複数テーブルまたは複数和名では推測しません。
+
 利用者レビューでセル値が確定した後、共通フレームの書式だけを期待値へ反映する場合は、対象ケースを明示して次を実行します。値が一致しないケースは更新せず失敗します。
 
 ```powershell
