@@ -143,7 +143,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\SqlAnalysisFormatter.u
 - 更新系では、テーブル列を参照する式を`移送元`へ、変数・定数・テーブル列を参照しない関数を`移送方法ほか`へ出力します。
 - INSERT SELECTの計算式、JOIN、検索条件、集計条件は先行する`サブクエリ[SQn]`へ出力し、データ移送表は`SQn.項目名`を移送元にします。
 - INSERT VALUESは対象列を明示した単一行に対応します。複数行、DEFAULT VALUES、INSERT EXECUTEは原因付きでフォールバックします。
-- CASEはSELECT項目、集計関数、WHERE、HAVING、GROUP BY、ORDER BY、JOIN内で複数行へ展開します。WHEN条件のANDとOR、THENまたはELSEにあるネストCASEも階層表示します。
+- CASEはSELECT項目、集計関数、WHERE、HAVING、GROUP BY、ORDER BY、JOIN、TOP、OFFSET、UPDATE SET、INSERT VALUES内で複数行へ展開します。列エイリアスのないSELECT項目は`CASE結果`として表示し、WHEN条件のANDとOR、THENまたはELSEにあるネストCASEも階層表示します。
 
 ### SELECT INTOの項目を和名にする
 
@@ -155,7 +155,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\SqlAnalysisFormatter.u
 
 SQL内の`AS display_name`自体は変更しません。`＜DB入出力項目定義＞`と`＜データ移送表＞`では`表示名`として出力します。
 
-アウトプットはA列からCL列を使い、MSゴシック9ポイント、列幅1.14、行高13.5、目盛り線なしで整形します。
+アウトプットはA列からCL列を使い、MSゴシック9ポイント、列幅1.14、行高13.5、目盛り線なし、折り返しと縮小表示なしで整形します。
 
 ### 成果物をコピーする
 
