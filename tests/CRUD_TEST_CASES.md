@@ -1695,7 +1695,6 @@ SELECT INTOは複雑度にかかわらず、サブクエリ表、`＜DB入出力
 | SEL-053 | 多段の複雑な条件式 |
 | SEL-054 | 複雑な派生テーブルJOIN |
 | SEL-055 | ネストしたサブクエリ |
-| SEL-056 | 定数・関数・JOIN・集計を含む拡張INSERT SELECT |
 | SEL-057 | WHERE句の検索CASE |
 | SEL-058 | SELECT DISTINCT |
 | SEL-059 | SELECT INTOのハイブリッド出力 |
@@ -1703,9 +1702,17 @@ SELECT INTOは複雑度にかかわらず、サブクエリ表、`＜DB入出力
 
 各SQLはScriptDomで構文エラーがないことと、A5M2 `Ctrl+Q`の実整形結果を確認済みです。
 
-## 追加期待値作成予定
+## 暫定実装済み・ユーザーレビュー待ち
+
+次のケースは推測期待値を先に固定して実装済みです。詳細は`docs/PROVISIONAL_OUTPUT_CASES.md`を参照してください。
 
 | ケース | 内容 | 状態 |
 | --- | --- | --- |
-| SEL-060 | INSERT VALUES | 未着手 |
-| SEL-062 | UPDATE SET内のサブクエリ | 未着手 |
+| SEL-045 | 単純なINSERT SELECTのハイブリッド出力 | 暫定確定・再レビュー待ち |
+| SEL-056 | 複雑なINSERT SELECTのハイブリッド出力 | 暫定確定・再レビュー待ち |
+| SEL-060 | INSERT VALUES | 暫定確定・レビュー待ち |
+| SEL-062 | UPDATE SET内のサブクエリ | 暫定確定・レビュー待ち |
+| SEL-063 | 派生SELECT付きUPDATE | 暫定確定・レビュー待ち |
+| SEL-064 | EXISTS付きDELETE | 暫定確定・レビュー待ち |
+
+SEL-060、SEL-062、SEL-063、SEL-064はA5M2 2.21.2の`Ctrl+Q`で実整形した入力を使用しています。

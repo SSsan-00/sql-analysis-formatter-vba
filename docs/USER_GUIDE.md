@@ -126,16 +126,21 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\SqlAnalysisFormatter.u
 | SELECT | `＜DB入出力項目定義＞` |
 | サブクエリ、WITH | `サブクエリ[名前]` |
 | SELECT INTO | `サブクエリ[SQn]`、`＜DB入出力項目定義＞`、`＜データ移送表＞` |
-| INSERT SELECT、DELETE、UPDATE | `＜データ移送表＞` |
+| INSERT VALUES | `＜データ移送表＞` |
+| INSERT SELECT | `サブクエリ[SQn]`、`＜データ移送表＞` |
+| SELECTを含まないDELETE、UPDATE | `＜データ移送表＞` |
+| SELECTを含むDELETE、UPDATE | 内側の`サブクエリ[名前]`、`＜データ移送表＞` |
 
 - SELECT INTOはクエリの複雑度にかかわらず、上記3表をこの順で出力します。
+- 更新系SQLにSELECT処理が含まれる場合は、SELECTの解析表を先、最終的なデータ移送表を後に出力します。
 - WITH句は名前付きサブクエリとして扱います。
 - ネストしたサブクエリは内側から外側、最後にクエリ全体の順で出力します。
 - 無名サブクエリには`SQ1`、`SQ2`の名前を付けます。
 - 未対応のSQLは、SQL解析シートのB列と同じ和名変換後SQLをA列へ1行ずつ出力します。
 - フォールバック時は1行空けた末尾へ`フォールバック原因`と、原因クエリがあるアウトプットシートの行範囲を表示します。
 - 更新系では、テーブル列を参照する式を`移送元`へ、変数・定数・テーブル列を参照しない関数を`移送方法ほか`へ出力します。
-- INSERT SELECTの計算式では、参照列を`移送元`へ、関数・計算式・列エイリアスを`移送方法ほか`へ出力します。
+- INSERT SELECTの計算式、JOIN、検索条件、集計条件は先行する`サブクエリ[SQn]`へ出力し、データ移送表は`SQn.項目名`を移送元にします。
+- INSERT VALUESは対象列を明示した単一行に対応します。複数行、DEFAULT VALUES、INSERT EXECUTEは原因付きでフォールバックします。
 
 ### SELECT INTOの項目を和名にする
 

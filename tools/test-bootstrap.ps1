@@ -106,6 +106,7 @@ try {
     Assert-PathExists (Join-Path $developerTarget 'SqlAnalysisFormatter.Parser.exe')
     Assert-PathExists (Join-Path $developerTarget 'README.md')
     Assert-PathExists (Join-Path $developerTarget 'docs\DEVELOPER_GUIDE.md')
+    Assert-PathExists (Join-Path $developerTarget 'docs\PROVISIONAL_OUTPUT_CASES.md')
     Assert-PathExists (Join-Path $developerTarget 'src\vba\SqlAnalysisFormatter.bas')
     Assert-PathExists (Join-Path $developerTarget 'src\vba\SqlAnalysisFormatterTests.bas')
     Assert-PathExists (Join-Path $developerTarget 'src\vba\SqlAnalysisFormatterGoldenTests.bas')

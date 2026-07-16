@@ -117,6 +117,7 @@ function Get-DeveloperArtifacts {
     }
 
     $artifacts.Add((New-Artifact (Join-Path $repoRoot 'docs\DEVELOPER_GUIDE.md') 'docs\DEVELOPER_GUIDE.md'))
+    $artifacts.Add((New-Artifact (Join-Path $repoRoot 'docs\PROVISIONAL_OUTPUT_CASES.md') 'docs\PROVISIONAL_OUTPUT_CASES.md'))
     $artifacts.Add((New-Artifact (Join-Path $repoRoot 'SqlAnalysisFormatter.sln') 'SqlAnalysisFormatter.sln'))
     $artifacts.Add((New-Artifact (Join-Path $repoRoot 'tests\CRUD_TEST_CASES.md') 'tests\CRUD_TEST_CASES.md'))
     $artifacts.Add((New-Artifact (Join-Path $repoRoot 'tests\ManualOutputCases.json') 'tests\ManualOutputCases.json'))
