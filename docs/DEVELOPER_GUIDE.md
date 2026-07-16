@@ -33,7 +33,7 @@ powershell -ExecutionPolicy Bypass -File tools/run-vba-tests.ps1 -ParserExePath 
 powershell -ExecutionPolicy Bypass -File tools/run-output-golden-tests.ps1
 ```
 
-`run-output-golden-tests.ps1` は75ケースについてセル値、主要罫線、塗り、フォント、折り返し、縮小表示、行高、列幅、目盛り線を実 Excel で比較します。内訳はユーザーレビュー済み62件、暫定期待値13件です。
+`run-output-golden-tests.ps1` は75ケースについてセル値、主要罫線、塗り、フォント、折り返し、縮小表示、行高、列幅、目盛り線を実 Excel で比較します。内訳はユーザーレビュー済み63件、暫定期待値12件です。
 各処理の所要時間を確認する場合は`-MeasurePerformance`を付けます。
 
 ```powershell

@@ -316,7 +316,6 @@
     },
     {
       "id": "SEL-063",
-      "review_status": "暫定確定（ユーザーレビュー未実施）",
       "sql_lines": ["update tb1 ", "set", "    状態 = sq.最新状態 ", "from", "    users as tb1 ", "    inner join ( ", "        select", "            tb2.注文ユーザーID", "            , max(tb2.状態) as latest_status ", "        from", "            order_status_history as tb2 ", "        group by", "            tb2.注文ユーザーID", "    ) as sq ", "        on tb1.ユーザーID = sq.注文ユーザーID ", "where", "    tb1.状態 = 'ACTIVE'"],
       "tables": { "tb1": "ユーザー", "tb2": "注文状態履歴", "sq": "(和名未取得)" },
       "output_fields": { "latest_status": "最新状態" }
