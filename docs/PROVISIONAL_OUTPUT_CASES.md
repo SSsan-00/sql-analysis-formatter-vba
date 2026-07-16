@@ -24,6 +24,9 @@
 | SEL-065 | FROMなしUPDATEのEXISTS検索条件 | SELECTを`SQ1`へ出力し、更新対象と`SQ1`を最終表の参照テーブルへ残す |
 | SEL-066 | UPDATEの比較条件にあるスカラーサブクエリ | 集計SELECTを`SQ1`へ出力し、比較対象を`(SQ1)`へ置換する |
 | SEL-067 | UPDATEのIN検索条件 | SELECTを`SQ1`へ出力し、検索条件を`IN (SQ1)`へ置換する |
+| SEL-068 | SUMの引数にあるCASE | 外側を`SUM(CASE結果)`と表示し、CASE分岐を右側へ複数行で出力する |
+| SEL-069 | ELSEにCASEを持つCASE | ELSEを`それ以外 → CASE`と表示し、内側の分岐を一段右へ出力する |
+| SEL-070 | ANDで結合したWHEN条件 | WHEN条件をANDの前後で分け、最後の条件行へ結果を出力する |
 
 SQLはA5:SQL Mk-2 2.21.2の`Ctrl+Q`で実整形し、`tests/ManualOutputCases.json`へ保存している。
 

@@ -143,6 +143,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\SqlAnalysisFormatter.u
 - 更新系では、テーブル列を参照する式を`移送元`へ、変数・定数・テーブル列を参照しない関数を`移送方法ほか`へ出力します。
 - INSERT SELECTの計算式、JOIN、検索条件、集計条件は先行する`サブクエリ[SQn]`へ出力し、データ移送表は`SQn.項目名`を移送元にします。
 - INSERT VALUESは対象列を明示した単一行に対応します。複数行、DEFAULT VALUES、INSERT EXECUTEは原因付きでフォールバックします。
+- CASEはSELECT項目、集計関数、WHERE、HAVING、GROUP BY、ORDER BY、JOIN内で複数行へ展開します。WHEN条件のANDとOR、THENまたはELSEにあるネストCASEも階層表示します。
 
 ### SELECT INTOの項目を和名にする
 
@@ -169,6 +170,7 @@ SQL内の`AS display_name`自体は変更しません。`＜DB入出力項目定
 - `アウトプット`シートの内容と出力書式
 
 1行目のヘッダーが変更されていても復元します。変換定義も削除されるため、再利用する定義は事前に別ファイルへ保管してください。
+クリア後も操作中のシートは切り替わりません。次に`アウトプット`シートを開いたときは、選択セルとスクロール位置がA1へ戻っています。
 
 ## バージョンを更新する
 
