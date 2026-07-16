@@ -866,6 +866,96 @@
         { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "status", "field_name_ja": "状態" },
         { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "deleted_at", "field_name_ja": "削除日時" }
       ]
+    },
+    {
+      "id": "SEL-071",
+      "title": "UPDATE SET内のCASE",
+      "review_status": "暫定確定（ユーザーレビュー未実施）",
+      "sql_lines": [
+        "update tb1 ",
+        "set",
+        "    status = case ",
+        "        when tb1.deleted_at is null ",
+        "        and tb1.active_flag = 1 ",
+        "            then 'ACTIVE' ",
+        "        else 'INACTIVE' ",
+        "        end ",
+        "from",
+        "    users as tb1"
+      ],
+      "definitions": [
+        { "table_id": "-", "table_name_ja": "ユーザー", "field_id": "status", "field_name_ja": "状態" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "deleted_at", "field_name_ja": "削除日時" },
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "active_flag", "field_name_ja": "有効区分" }
+      ]
+    },
+    {
+      "id": "SEL-072",
+      "title": "INSERT VALUES内のCASE",
+      "review_status": "暫定確定（ユーザーレビュー未実施）",
+      "sql_lines": [
+        "insert ",
+        "into users(status) ",
+        "values ( ",
+        "    case ",
+        "        when @active = 1 ",
+        "            then 'ACTIVE' ",
+        "        else 'INACTIVE' ",
+        "        end",
+        ")"
+      ],
+      "definitions": [
+        { "table_id": "users", "table_name_ja": "ユーザー", "field_id": "status", "field_name_ja": "状態" },
+        { "table_id": "-", "table_name_ja": "ユーザー", "field_id": "status", "field_name_ja": "状態" }
+      ]
+    },
+    {
+      "id": "SEL-073",
+      "title": "TOP内のCASE",
+      "review_status": "暫定確定（ユーザーレビュー未実施）",
+      "sql_lines": [
+        "select",
+        "    top(case when @all_rows = 1 then 100 else 10 end) tb1.user_id ",
+        "from",
+        "    users as tb1"
+      ],
+      "definitions": [
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "user_id", "field_name_ja": "ユーザーID" }
+      ]
+    },
+    {
+      "id": "SEL-074",
+      "title": "OFFSET内のCASE",
+      "review_status": "暫定確定（ユーザーレビュー未実施）",
+      "sql_lines": [
+        "select",
+        "    tb1.user_id ",
+        "from",
+        "    users as tb1 ",
+        "order by",
+        "    tb1.user_id offset (case when @skip_rows = 1 then 10 else 0 end) rows fetch next 20 rows only"
+      ],
+      "definitions": [
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "user_id", "field_name_ja": "ユーザーID" }
+      ]
+    },
+    {
+      "id": "SEL-075",
+      "title": "取得結果を直接返すCASE",
+      "review_status": "暫定確定（ユーザーレビュー未実施）",
+      "sql_lines": [
+        "select",
+        "    case ",
+        "        when tb1.status = 'ACTIVE' ",
+        "            then 1 ",
+        "        else 0 ",
+        "        end ",
+        "from",
+        "    users as tb1"
+      ],
+      "definitions": [
+        { "table_id": "tb1", "table_name_ja": "ユーザー", "field_id": "status", "field_name_ja": "状態" }
+      ]
     }
   ]
 }

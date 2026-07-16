@@ -7,13 +7,13 @@ using SqlAnalysisFormatter.Parser;
 namespace SqlAnalysisFormatter.Parser.Tests;
 
 /// <summary>
-/// 登録済みExcel期待値70件との回帰テスト
+/// 登録済みExcel期待値75件との回帰テスト
 /// </summary>
 [TestClass]
 public sealed class OutputGoldenRegressionTests
 {
     /// <summary>
-    /// 全70ケースが登録済み期待値と一致することを確認
+    /// 全75ケースが登録済み期待値と一致することを確認
     /// </summary>
     [TestMethod]
     public void Build_MatchesAllRegisteredExpectations()

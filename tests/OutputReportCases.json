@@ -364,6 +364,36 @@
       "review_status": "暫定確定（ユーザーレビュー未実施）",
       "sql_lines": ["select", "    case ", "        when ( ", "            tb1.状態 = 'ACTIVE' ", "            and tb1.削除日時 is null", "        ) ", "            then 1 ", "        else 0 ", "        end as eligible_flag ", "from", "    users as tb1"],
       "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-071",
+      "review_status": "暫定確定（ユーザーレビュー未実施）",
+      "sql_lines": ["update tb1 ", "set", "    状態 = case ", "        when tb1.削除日時 is null ", "        and tb1.有効区分 = 1 ", "            then 'ACTIVE' ", "        else 'INACTIVE' ", "        end ", "from", "    users as tb1"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-072",
+      "review_status": "暫定確定（ユーザーレビュー未実施）",
+      "sql_lines": ["insert ", "into users(状態) ", "values ( ", "    case ", "        when @active = 1 ", "            then 'ACTIVE' ", "        else 'INACTIVE' ", "        end", ")"],
+      "tables": { "users": "ユーザー" }
+    },
+    {
+      "id": "SEL-073",
+      "review_status": "暫定確定（ユーザーレビュー未実施）",
+      "sql_lines": ["select", "    top(case when @all_rows = 1 then 100 else 10 end) tb1.ユーザーID ", "from", "    users as tb1"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-074",
+      "review_status": "暫定確定（ユーザーレビュー未実施）",
+      "sql_lines": ["select", "    tb1.ユーザーID ", "from", "    users as tb1 ", "order by", "    tb1.ユーザーID offset (case when @skip_rows = 1 then 10 else 0 end) rows fetch next 20 rows only"],
+      "tables": { "tb1": "ユーザー" }
+    },
+    {
+      "id": "SEL-075",
+      "review_status": "暫定確定（ユーザーレビュー未実施）",
+      "sql_lines": ["select", "    case ", "        when tb1.状態 = 'ACTIVE' ", "            then 1 ", "        else 0 ", "        end ", "from", "    users as tb1"],
+      "tables": { "tb1": "ユーザー" }
     }
   ]
 }
