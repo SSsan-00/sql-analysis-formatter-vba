@@ -338,7 +338,6 @@
     },
     {
       "id": "SEL-067",
-      "review_status": "暫定確定（ユーザーレビュー未実施）",
       "sql_lines": ["update tb1 ", "set", "    状態 = 'ARCHIVED' ", "from", "    users as tb1 ", "where", "    tb1.ユーザーID in ( ", "        select", "            tb2.注文ユーザーID ", "        from", "            orders as tb2 ", "        where", "            tb2.注文日時 < @cutoff", "    )"],
       "tables": { "tb1": "ユーザー", "tb2": "注文" }
     },
