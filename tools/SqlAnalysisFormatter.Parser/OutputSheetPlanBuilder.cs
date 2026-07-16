@@ -542,6 +542,14 @@ public static class OutputSheetPlanBuilder
             row++;
         }
 
+        if (query.UniqueRowFilter == UniqueRowFilter.Distinct)
+        {
+            cells.Add(new OutputCell(row, 1, "重複除外"));
+            cells.Add(new OutputCell(row, 7, "DISTINCT"));
+            sections.Add(new OutputSection(OutputSectionKind.Standard, row, row));
+            row++;
+        }
+
         var itemStartRow = row;
         for (var index = 0; index < query.SelectElements.Count; index++)
         {
@@ -593,7 +601,7 @@ public static class OutputSheetPlanBuilder
                     cells.Add(new OutputCell(row, 1, "並び順"));
                 }
 
-                var value = FragmentText(sql, element.Expression);
+                var value = DisplayText(sql, element.Expression);
                 if (element.SortOrder == SortOrder.Descending)
                 {
                     value += "(降順)";
@@ -644,7 +652,7 @@ public static class OutputSheetPlanBuilder
                 return WriteSimpleCase(cells, sql, simpleCase, row);
             }
 
-            cells.Add(new OutputCell(row, 32, FragmentText(sql, scalar.Expression)));
+            cells.Add(new OutputCell(row, 32, DisplayText(sql, scalar.Expression)));
             return 1;
         }
 
@@ -659,19 +667,38 @@ public static class OutputSheetPlanBuilder
         ICollection<OutputCell> cells,
         string sql,
         SearchedCaseExpression expression,
-        int startRow)
+        int startRow,
+        int column = 32)
     {
         var row = startRow;
         foreach (var clause in expression.WhenClauses)
         {
-            var value = $"{FragmentText(sql, clause.WhenExpression)} → {FragmentText(sql, clause.ThenExpression)}";
-            cells.Add(new OutputCell(row, 32, value));
-            row++;
+            var condition = DisplayText(sql, clause.WhenExpression);
+            if (clause.ThenExpression is SearchedCaseExpression nestedSearchedCase)
+            {
+                cells.Add(new OutputCell(row, column, $"{condition} → CASE"));
+                row++;
+                row += WriteSearchedCase(cells, sql, nestedSearchedCase, row, column + 2);
+            }
+            else if (clause.ThenExpression is SimpleCaseExpression nestedSimpleCase)
+            {
+                cells.Add(new OutputCell(row, column, $"{condition} → CASE"));
+                row++;
+                row += WriteSimpleCase(cells, sql, nestedSimpleCase, row, column + 2);
+            }
+            else
+            {
+                cells.Add(new OutputCell(
+                    row,
+                    column,
+                    $"{condition} → {DisplayText(sql, clause.ThenExpression)}"));
+                row++;
+            }
         }
 
         if (expression.ElseExpression is not null)
         {
-            cells.Add(new OutputCell(row, 32, $"それ以外 → {FragmentText(sql, expression.ElseExpression)}"));
+            cells.Add(new OutputCell(row, column, $"それ以外 → {DisplayText(sql, expression.ElseExpression)}"));
             row++;
         }
 
@@ -685,20 +712,21 @@ public static class OutputSheetPlanBuilder
         ICollection<OutputCell> cells,
         string sql,
         SimpleCaseExpression expression,
-        int startRow)
+        int startRow,
+        int column = 32)
     {
         var row = startRow;
-        var input = FragmentText(sql, expression.InputExpression);
+        var input = DisplayText(sql, expression.InputExpression);
         foreach (var clause in expression.WhenClauses)
         {
-            var value = $"{input} = {FragmentText(sql, clause.WhenExpression)} → {FragmentText(sql, clause.ThenExpression)}";
-            cells.Add(new OutputCell(row, 32, value));
+            var value = $"{input} = {DisplayText(sql, clause.WhenExpression)} → {DisplayText(sql, clause.ThenExpression)}";
+            cells.Add(new OutputCell(row, column, value));
             row++;
         }
 
         if (expression.ElseExpression is not null)
         {
-            cells.Add(new OutputCell(row, 32, $"それ以外 → {FragmentText(sql, expression.ElseExpression)}"));
+            cells.Add(new OutputCell(row, column, $"それ以外 → {DisplayText(sql, expression.ElseExpression)}"));
             row++;
         }
 
@@ -747,7 +775,7 @@ public static class OutputSheetPlanBuilder
                         cells.Add(new OutputCell(row, 15, innerParts[innerIndex].Connector));
                     }
 
-                    cells.Add(new OutputCell(row, 17, FragmentText(sql, innerParts[innerIndex].Expression)));
+                    cells.Add(new OutputCell(row, 17, DisplayText(sql, innerParts[innerIndex].Expression)));
                     row++;
                 }
 
@@ -761,7 +789,7 @@ public static class OutputSheetPlanBuilder
                     cells.Add(new OutputCell(row, 7, part.Connector));
                 }
 
-                cells.Add(new OutputCell(row, 17, FragmentText(sql, part.Expression)));
+                cells.Add(new OutputCell(row, 17, DisplayText(sql, part.Expression)));
                 row++;
             }
         }
@@ -853,7 +881,7 @@ public static class OutputSheetPlanBuilder
                     cells.Add(new OutputCell(row, 7, parts[conditionIndex].Connector));
                 }
 
-                cells.Add(new OutputCell(row, 17, FragmentText(sql, parts[conditionIndex].Expression)));
+                cells.Add(new OutputCell(row, 17, DisplayText(sql, parts[conditionIndex].Expression)));
                 row++;
             }
         }
@@ -936,8 +964,8 @@ public static class OutputSheetPlanBuilder
     private static string RenderGrouping(string sql, GroupingSpecification grouping)
     {
         return grouping is ExpressionGroupingSpecification expressionGrouping
-            ? FragmentText(sql, expressionGrouping.Expression)
-            : FragmentText(sql, grouping);
+            ? DisplayText(sql, expressionGrouping.Expression)
+            : DisplayText(sql, grouping);
     }
 
     /// <summary>
@@ -982,12 +1010,42 @@ public static class OutputSheetPlanBuilder
         IEnumerable<string> additionalTables)
     {
         return (fromClause?.TableReferences
-            .SelectMany(EnumerateNamedTables)
-            .Select(table => BuildTableDisplay(table, mappings))
+            .SelectMany(table => EnumerateTableDisplays(table, mappings))
             ?? [])
             .Concat(additionalTables)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    /// <summary>
+    /// テーブル参照ツリーを帳票上の参照名へ変換
+    /// </summary>
+    private static IEnumerable<string> EnumerateTableDisplays(
+        TableReference table,
+        IReadOnlyList<MappingDefinition> mappings)
+    {
+        switch (table)
+        {
+            case NamedTableReference named:
+                yield return BuildTableDisplay(named, mappings);
+                break;
+            case QualifiedJoin join:
+                foreach (var display in EnumerateTableDisplays(join.FirstTableReference, mappings))
+                {
+                    yield return display;
+                }
+                foreach (var display in EnumerateTableDisplays(join.SecondTableReference, mappings))
+                {
+                    yield return display;
+                }
+                break;
+            case InlineDerivedTable inlineDerived:
+                yield return $"派生テーブル[{inlineDerived.Alias?.Value ?? MissingName}]";
+                break;
+            case QueryDerivedTable queryDerived:
+                yield return queryDerived.Alias?.Value ?? MissingName;
+                break;
+        }
     }
 
     /// <summary>
@@ -1095,6 +1153,18 @@ public static class OutputSheetPlanBuilder
     private static string FragmentText(string sql, TSqlFragment fragment)
     {
         return ExtractFragmentText(sql, fragment, normalizeCoalesce: true);
+    }
+
+    /// <summary>
+    /// SQL断片を帳票向けの大文字表記へ整形
+    /// </summary>
+    private static string DisplayText(
+        string sql,
+        TSqlFragment fragment,
+        bool uppercaseDateParts = false,
+        bool compactUnarySigns = false)
+    {
+        return SqlDisplayFormatter.Format(sql, fragment, uppercaseDateParts, compactUnarySigns);
     }
 
     /// <summary>

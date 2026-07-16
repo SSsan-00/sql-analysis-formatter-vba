@@ -81,6 +81,70 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
+    /// 組み込み関数とSQL演算子を帳票向けの大文字表記へ統一することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_NormalizesFunctionsAndSqlOperatorsForDisplay()
+    {
+        const string sql = """
+            select
+                count(tb1.ユーザーID) as user_count
+                , sysdatetime() as created_at
+            from
+                users as tb1
+            order by
+                iif(tb1.削除日時 is null, 0, 1)
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, [new("tb1", "ユーザー", "", "")]);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("COUNT(tb1.ユーザーID)", CellValue(plan, 3, 32));
+        Assert.AreEqual("SYSDATETIME()", CellValue(plan, 4, 32));
+        Assert.AreEqual("IIF(tb1.削除日時 IS NULL, 0, 1)", CellValue(plan, 5, 17));
+    }
+
+    /// <summary>
+    /// VALUESテーブル値コンストラクターを派生テーブルとして表示することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_WritesValuesSourceAsDerivedTable()
+    {
+        const string sql = """
+            select
+                v.ユーザーID
+            from
+                (values (1), (2)) as v(user_id)
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("参照テーブル: 派生テーブル[v]", CellValue(plan, 2, 1));
+    }
+
+    /// <summary>
+    /// DISTINCT指定を取得項目より前へ出力することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_WritesDistinctBeforeSelectItems()
+    {
+        const string sql = """
+            select distinct
+                tb1.状態
+            from
+                users as tb1
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, [new("tb1", "ユーザー", "", "")]);
+
+        Assert.AreEqual(4, plan.RowCount);
+        Assert.AreEqual("重複除外", CellValue(plan, 3, 1));
+        Assert.AreEqual("DISTINCT", CellValue(plan, 3, 7));
+        Assert.AreEqual("取得項目", CellValue(plan, 4, 1));
+    }
+
+    /// <summary>
     /// SELECT各句を期待する行順で出力することを確認
     /// </summary>
     [TestMethod]
@@ -273,6 +337,46 @@ public sealed class OutputSheetPlanBuilderTests
             (4, 31, "※"),
             (4, 32, "tb1.状態 = 'ACTIVE' → '有効'"),
             (5, 32, "それ以外 → '無効'"));
+    }
+
+    /// <summary>
+    /// ネストしたCASEを階層ごとの列へ展開することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_ExpandsNestedCaseBranches()
+    {
+        const string sql = """
+            select
+                case
+                    when tb1.状態 = 'ACTIVE' then
+                        case
+                            when tb1.ランクコード = 'VIP' then '優良'
+                            else '通常'
+                        end
+                    when tb1.状態 = 'LOCKED' then '停止'
+                    else '無効'
+                end as user_category
+            from
+                users as tb1
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, [new("tb1", "ユーザー", "", "")]);
+
+        Assert.AreEqual(7, plan.RowCount);
+        AssertCells(
+            plan,
+            (1, 1, "＜DB入出力項目定義＞"),
+            (2, 1, "参照テーブル: ユーザー[tb1]"),
+            (3, 1, "取得項目"),
+            (3, 7, "取得項目1"),
+            (3, 15, ":"),
+            (3, 17, "user_category"),
+            (3, 31, "※"),
+            (3, 32, "tb1.状態 = 'ACTIVE' → CASE"),
+            (4, 34, "tb1.ランクコード = 'VIP' → '優良'"),
+            (5, 34, "それ以外 → '通常'"),
+            (6, 32, "tb1.状態 = 'LOCKED' → '停止'"),
+            (7, 32, "それ以外 → '無効'"));
     }
 
     /// <summary>
