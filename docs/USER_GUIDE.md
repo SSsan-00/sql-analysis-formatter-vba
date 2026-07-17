@@ -147,6 +147,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\SqlAnalysisFormatter.u
 - 更新系では、単純なテーブル列参照だけを`移送元`へ出力します。SUMなどの集計、関数、算術演算、CASTなどの式は`移送方法ほか`へ出力し、式が参照するテーブル列を出現順・重複なしの`、`区切りで`移送元`へ併記します。COUNT(*)、変数、定数など特定のテーブル列を参照しない式では`移送元`を空欄にします。
 - SELECT INTO、INSERT SELECT、UPDATE SET、INSERT VALUESのCASEは、`CASE結果`と分岐を`移送方法ほか`へ出力します。CASEがCAST、関数、演算、括弧など任意の外側式で包まれていても、`CAST(CASE結果 AS ...)`のように外側式を保って展開します。外側式とTHEN/ELSEの戻り値が参照するテーブル列は、出現順かつ重複なしで`tb1.name、tb1.age`のように`移送元`へ列挙します。WHEN条件だけが参照する列は含めず、対象となる列参照がなければ`移送元`は空欄にします。
 - INSERT SELECTのトップレベルSELECTにある計算式はデータ移送表の移送元または移送方法へ直接対応させ、JOIN、検索条件、グループ、集計条件は`＜DB入出力項目定義＞`へ出力します。
+- INSERT SELECTのトップレベルにUNIONまたはUNION ALLがある場合、SELECT側では`＜UNION＞`または`＜UNION ALL＞`を表示し、データ移送表側では各SELECTを`＜移送パターン1＞`、`＜移送パターン2＞`のように分けてINSERT対象列へ対応させます。集合演算のタグはデータ移送表側へ重複表示しません。
 - INSERT VALUESは対象列を明示した単一行に対応します。CASEは前項の配置規則に従い、同一項目の複数行を1つの枠で囲みます。複数行、DEFAULT VALUES、INSERT EXECUTEは原因付きでフォールバックします。
 - CASEはSELECT項目、集計関数、WHERE、HAVING、GROUP BY、ORDER BY、JOIN、TOP、OFFSET、UPDATE SET、INSERT VALUES内で複数行へ展開します。列エイリアスのないSELECT項目は`CASE結果`として表示し、ELSE分岐は原文どおり`ELSE`と表示します。複合WHEN条件は括弧とAND/ORの論理構造を再帰的に分解し、同種演算子の連続を同じ階層へ揃え、異なる論理グループを2列ずつ右へ下げます。元SQLの括弧は省略せず、各グループの先頭条件へ開き括弧、末尾条件へ閉じ括弧を表示します。THENまたはELSEの直下にCASEがある場合は、親条件と内側の先頭条件を同じ行へ直接連結し、内側の残りの分岐を2列右へ表示します。
 - 罫線は取得項目、条件、結合、移送項目などの表本体だけを外枠で囲みます。タイトル行と参照テーブル行は外枠に含めません。

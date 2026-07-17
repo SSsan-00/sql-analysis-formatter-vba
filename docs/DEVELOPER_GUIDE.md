@@ -9,8 +9,8 @@
 - `tools/SqlAnalysisFormatter.Parser`: ScriptDom を使う C# parser
 - `tests/SqlAnalysisFormatter.Parser.Tests`: MSTest による C# テスト
 - `tests/CRUD_TEST_CASES.md`: SQL 変換ケース資料
-- `tests/OutputReportCases.json`: 登録済み75ケースの入力 SQL と和名定義
-- `tests/SqlAnalysisFormatter.OutputExpectations.xlsx`: 登録済み75ケースとレビュー専用SEL-076・SEL-077の期待値ブック
+- `tests/OutputReportCases.json`: 登録済み76ケースの入力 SQL と和名定義
+- `tests/SqlAnalysisFormatter.OutputExpectations.xlsx`: 登録済み76ケースとレビュー専用SEL-076の期待値ブック
 - `tests/ManualOutputCases.json`: 確定済みケースとユーザーレビュー待ちケースの入力 SQL・和名定義
 - `docs/PROVISIONAL_OUTPUT_CASES.md`: 実装前・実装後の推測期待値を管理するユーザーレビュー待ちケース
 - `tools/Set-ManualOutputCase.ps1`: 指定ケースをマクロブックへ投入して期待値作成を開始するスクリプト
@@ -33,7 +33,7 @@ powershell -ExecutionPolicy Bypass -File tools/run-vba-tests.ps1 -ParserExePath 
 powershell -ExecutionPolicy Bypass -File tools/run-output-golden-tests.ps1
 ```
 
-`run-output-golden-tests.ps1` は75ケースについてセル値、主要罫線、塗り、フォント、折り返し、縮小表示、行高、列幅、目盛り線を実 Excel で比較します。内訳はユーザーレビュー済み71件、暫定期待値4件です。
+`run-output-golden-tests.ps1` は76ケースについてセル値、主要罫線、塗り、フォント、折り返し、縮小表示、行高、列幅、目盛り線を実 Excel で比較します。内訳はユーザーレビュー済み72件、暫定期待値4件です。
 各処理の所要時間を確認する場合は`-MeasurePerformance`を付けます。
 
 ```powershell

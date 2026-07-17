@@ -969,7 +969,6 @@
     {
       "id": "SEL-077",
       "title": "INSERT SELECT内のUNION ALL",
-      "review_status": "暫定期待値（ユーザーレビュー待ち）",
       "sql_lines": [
         "insert ",
         "into user_archive(user_id, name) ",

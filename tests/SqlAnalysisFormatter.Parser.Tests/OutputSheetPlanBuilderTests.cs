@@ -1351,6 +1351,186 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
+    /// INSERT SELECT内のUNION ALLを既存のSELECT表と分岐別のデータ移送表へ変換することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_CreatesInsertUnionAllTransferPatterns()
+    {
+        const string sql = """
+            INSERT INTO user_archive(ユーザーID, 氏名)
+            SELECT
+                tb1.ユーザーID
+                , tb1.氏名
+            FROM
+                users AS tb1
+            WHERE
+                tb1.状態 = 'ACTIVE'
+            UNION ALL
+            SELECT
+                tb2.ユーザーID
+                , TRIM(tb2.氏名)
+            FROM
+                archived_users AS tb2
+            WHERE
+                tb2.状態 = 'INACTIVE'
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("user_archive", "ユーザーアーカイブ", "", ""),
+            new("tb1", "ユーザー", "", ""),
+            new("tb2", "退会ユーザー", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(20, plan.RowCount);
+        AssertCells(
+            plan,
+            (1, 1, "＜DB入出力項目定義＞"),
+            (2, 1, "参照テーブル: ユーザー[tb1]、退会ユーザー[tb2]"),
+            (3, 1, "取得項目"),
+            (3, 7, "取得項目1"),
+            (3, 15, ":"),
+            (3, 17, "tb1.ユーザーID"),
+            (4, 7, "取得項目2"),
+            (4, 15, ":"),
+            (4, 17, "tb1.氏名"),
+            (5, 1, "検索条件"),
+            (5, 17, "tb1.状態 = 'ACTIVE'"),
+            (6, 1, "＜UNION ALL＞"),
+            (7, 1, "取得項目"),
+            (7, 7, "取得項目1"),
+            (7, 15, ":"),
+            (7, 17, "tb2.ユーザーID"),
+            (8, 7, "取得項目2"),
+            (8, 15, ":"),
+            (8, 17, "TRIM(tb2.氏名)"),
+            (9, 1, "検索条件"),
+            (9, 17, "tb2.状態 = 'INACTIVE'"),
+            (11, 1, "＜データ移送表＞"),
+            (12, 1, "参照テーブル: ユーザーアーカイブ"),
+            (13, 1, "＜移送パターン1＞"),
+            (14, 1, "項目"),
+            (14, 19, "移送元"),
+            (14, 37, "移送方法ほか"),
+            (15, 1, "ユーザーID"),
+            (15, 19, "tb1.ユーザーID"),
+            (16, 1, "氏名"),
+            (16, 19, "tb1.氏名"),
+            (17, 1, "＜移送パターン2＞"),
+            (18, 1, "項目"),
+            (18, 19, "移送元"),
+            (18, 37, "移送方法ほか"),
+            (19, 1, "ユーザーID"),
+            (19, 19, "tb2.ユーザーID"),
+            (20, 1, "氏名"),
+            (20, 19, "tb2.氏名"),
+            (20, 37, "TRIM(tb2.氏名)"));
+        Assert.IsFalse(plan.Sections.Any(section =>
+            section.StartRow == 13 &&
+            section.EndRow == 13));
+        Assert.IsTrue(plan.Sections.Any(section =>
+            section.Kind == OutputSectionKind.Transfer &&
+            section.StartRow == 14 &&
+            section.EndRow == 16));
+        Assert.IsFalse(plan.Sections.Any(section =>
+            section.StartRow == 17 &&
+            section.EndRow == 17));
+        Assert.IsTrue(plan.Sections.Any(section =>
+            section.Kind == OutputSectionKind.Transfer &&
+            section.StartRow == 18 &&
+            section.EndRow == 20));
+    }
+
+    /// <summary>
+    /// 重複排除するUNIONでも各SELECTを移送パターンへ対応させることを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_CreatesInsertUnionTransferPatterns()
+    {
+        const string sql = """
+            INSERT INTO user_archive(ユーザーID)
+            SELECT tb1.ユーザーID FROM users AS tb1
+            UNION
+            SELECT tb2.ユーザーID FROM archived_users AS tb2
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("user_archive", "ユーザーアーカイブ", "", ""),
+            new("tb1", "ユーザー", "", ""),
+            new("tb2", "退会ユーザー", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(1, plan.Cells.Count(cell => cell.Value == "＜UNION＞"));
+        Assert.AreEqual(1, plan.Cells.Count(cell => cell.Value == "＜移送パターン1＞"));
+        Assert.AreEqual(1, plan.Cells.Count(cell => cell.Value == "＜移送パターン2＞"));
+        Assert.IsTrue(plan.Cells.Any(cell => cell.Column == 19 && cell.Value == "tb1.ユーザーID"));
+        Assert.IsTrue(plan.Cells.Any(cell => cell.Column == 19 && cell.Value == "tb2.ユーザーID"));
+    }
+
+    /// <summary>
+    /// UNIONの各分岐で取得項目数がINSERT対象列数と一致する必要があることを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_FallsBackWhenInsertUnionBranchColumnCountDiffers()
+    {
+        const string sql = """
+            INSERT INTO user_archive(ユーザーID, 氏名)
+            SELECT tb1.ユーザーID, tb1.氏名 FROM users AS tb1
+            UNION ALL
+            SELECT tb2.ユーザーID FROM archived_users AS tb2
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsTrue(plan.IsFallback);
+        StringAssert.Contains(plan.FallbackReason, "移送パターン2");
+        StringAssert.Contains(plan.FallbackReason, "取得項目数が一致しません");
+    }
+
+    /// <summary>
+    /// INSERT UNION内の実在するCTEだけをサブクエリ表として先行出力することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_PreservesActualCteInsideInsertUnion()
+    {
+        const string sql = """
+            WITH active_users AS (
+                SELECT tb1.ユーザーID
+                FROM users AS tb1
+                WHERE tb1.状態 = 'ACTIVE'
+            )
+            INSERT INTO user_archive(ユーザーID)
+            SELECT active_users.ユーザーID FROM active_users
+            UNION ALL
+            SELECT tb2.ユーザーID FROM archived_users AS tb2
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("user_archive", "ユーザーアーカイブ", "", ""),
+            new("active_users", "対象ユーザー", "", ""),
+            new("tb1", "ユーザー", "", ""),
+            new("tb2", "退会ユーザー", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(1, plan.Cells.Count(cell => cell.Value == "サブクエリ[active_users]"));
+        Assert.AreEqual(1, plan.Cells.Count(cell => cell.Value == "＜DB入出力項目定義＞"));
+        Assert.AreEqual(1, plan.Cells.Count(cell => cell.Value == "＜データ移送表＞"));
+        Assert.IsFalse(plan.Cells.Any(cell => cell.Value == "サブクエリ[SQ1]"));
+        Assert.IsTrue(plan.Cells.Any(cell =>
+            cell.Column == 19 && cell.Value == "active_users.ユーザーID"));
+        Assert.IsTrue(plan.Cells.Any(cell =>
+            cell.Column == 19 && cell.Value == "tb2.ユーザーID"));
+    }
+
+    /// <summary>
     /// 複雑なINSERT SELECTの計算式を移送方法へ、参照列を移送元へ対応させることを確認
     /// </summary>
     [TestMethod]

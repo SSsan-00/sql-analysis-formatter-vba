@@ -23,20 +23,17 @@ SQLはA5:SQL Mk-2 2.21.2の`Ctrl+Q`で実整形し、`tests/ManualOutputCases.js
 
 ## 実装前の期待値レビュー
 
-次の2ケースは、実装前に出力イメージを確認するための推測期待値である。`tests/SqlAnalysisFormatter.OutputExpectations.xlsx`にはレビュー用シートを追加済みだが、`tests/OutputReportCases.json`には未登録のため、75件の回帰テスト対象には含まれない。
+次のケースは、実装前に出力イメージを確認するための推測期待値である。`tests/SqlAnalysisFormatter.OutputExpectations.xlsx`にはレビュー用シートを追加済みだが、`tests/OutputReportCases.json`には未登録のため、76件の回帰テスト対象には含まれない。
 
 | ケース | SQL概要 | 暫定期待値 |
 | --- | --- | --- |
 | SEL-076 | 複数行INSERT VALUES | `＜VALUES 1行目＞`、`＜VALUES 2行目＞`の順に、行ごとに独立したデータ移送表を出力する。各ラベルは表の外に置き、各表本体だけを外枠で囲う |
-| SEL-077 | INSERT SELECT内のUNION ALL | SELECT表は既存の`＜UNION ALL＞`表現を再利用する。データ移送表では集合演算を重複表示せず、`＜移送パターン1＞`、`＜移送パターン2＞`としてSELECT分岐と移送先列の対応を表す |
-
-SEL-077の各移送パターンは、UNION ALLの左辺・右辺を上から順に対応させる。各分岐の取得列数とINSERT対象列数が一致しない場合は、原因付きフォールバックとする想定である。
 
 ## 現在の制約
 
 - INSERT VALUESは対象列を明示した単一行だけを表形式へ変換する。SEL-076の複数行VALUESは期待値レビュー後に実装する。
 - DEFAULT VALUES、INSERT EXECUTEは原因付きフォールバックとする。
-- UNIONなどの集合演算を直接ソースにするINSERT SELECTは原因付きフォールバックとする。SEL-077は期待値レビュー後に実装する。
+- INSERT SELECTのUNIONとUNION ALLは各SELECTを移送パターンへ分けて出力する。EXCEPTとINTERSECTを直接ソースにする場合は原因付きフォールバックとする。
 
 ## レビュー手順
 

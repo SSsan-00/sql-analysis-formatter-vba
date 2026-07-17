@@ -295,6 +295,16 @@ public static class OutputSheetPlanBuilder
         IReadOnlyList<MappingDefinition> mappings)
     {
         var sourceExpression = UnwrapQueryExpression(selectSource.Select);
+        if (sourceExpression is BinaryQueryExpression binarySource)
+        {
+            return BuildInsertUnionSelect(
+                sql,
+                statement,
+                specification,
+                binarySource,
+                mappings);
+        }
+
         if (sourceExpression is not QuerySpecification sourceQuery)
         {
             return CreateFallback(sql, "未対応のINSERT形式: SELECTの集合演算", selectSource.Select);
@@ -336,6 +346,92 @@ public static class OutputSheetPlanBuilder
         plans.Add(ReplaceSubqueries(transferPlan, sql, sourceChildren));
 
         return CombinePlans(plans);
+    }
+
+    /// <summary>
+    /// INSERT SELECT内のUNIONを既存の複合SELECT表と分岐別のデータ移送表へ変換
+    /// </summary>
+    private static OutputSheetPlan BuildInsertUnionSelect(
+        string sql,
+        InsertStatement statement,
+        InsertSpecification specification,
+        BinaryQueryExpression sourceExpression,
+        IReadOnlyList<MappingDefinition> mappings)
+    {
+        if (!ContainsOnlyUnionOperations(sourceExpression))
+        {
+            return CreateFallback(
+                sql,
+                "未対応のINSERT形式: UNION以外のSELECT集合演算",
+                sourceExpression);
+        }
+
+        var branches = new List<QuerySpecification>();
+        var separators = new List<string>();
+        AddBinaryBranches(sourceExpression, branches, separators);
+        if (branches.Count == 0 || separators.Count != branches.Count - 1)
+        {
+            return CreateFallback(
+                sql,
+                "INSERT SELECTのUNION分岐を取得できませんでした",
+                sourceExpression);
+        }
+
+        for (var index = 0; index < branches.Count; index++)
+        {
+            if (specification.Columns.Count != branches[index].SelectElements.Count)
+            {
+                return CreateFallback(
+                    sql,
+                    $"INSERT SELECTの対象列数と移送パターン{index + 1}の取得項目数が一致しません",
+                    branches[index]);
+            }
+        }
+
+        var (subqueries, plans) = BuildLeadingSubqueryPlans(sql, statement, mappings);
+        var sourceChildren = DirectChildSubqueries(sourceExpression, subqueries);
+        var sourcePlan = BuildQueryExpression(
+            sql,
+            sourceExpression,
+            mappings,
+            "＜DB入出力項目定義＞",
+            sourceChildren.Where(child => !child.IsNamed).Select(child => child.Name));
+        plans.Add(ReplaceSubqueries(sourcePlan, sql, sourceChildren));
+
+        var targets = specification.Columns
+            .Select(column => FragmentText(sql, column))
+            .ToArray();
+        var transferPatterns = branches
+            .Select(branch => BuildSelectTransfers(sql, targets, branch.SelectElements))
+            .ToArray();
+        var targetDisplay = BuildTargetTableDisplay(
+            specification.Target,
+            mappings,
+            includeIdentifier: false);
+        var transferPlan = BuildPatternedDataTransferPlan(
+            sql,
+            targetDisplay,
+            transferPatterns);
+        plans.Add(ReplaceSubqueries(transferPlan, sql, sourceChildren));
+
+        return CombinePlans(plans);
+    }
+
+    /// <summary>
+    /// 複合クエリがUNIONまたはUNION ALLだけで構成されているか判定
+    /// </summary>
+    private static bool ContainsOnlyUnionOperations(QueryExpression expression)
+    {
+        expression = UnwrapQueryExpression(expression);
+        if (expression is QuerySpecification)
+        {
+            return true;
+        }
+
+        return expression is BinaryQueryExpression binary &&
+            binary.BinaryQueryExpressionType == BinaryQueryExpressionType.Union &&
+            ContainsOnlyUnionOperations(binary.FirstQueryExpression) &&
+            ContainsOnlyUnionOperations(binary.SecondQueryExpression);
     }
 
     /// <summary>
@@ -481,65 +577,7 @@ public static class OutputSheetPlanBuilder
 
         if (transfers.Count > 0)
         {
-            var startRow = row;
-            var transferGroups = new List<OutputSection>();
-            cells.Add(new OutputCell(row, 1, "項目"));
-            cells.Add(new OutputCell(row, 19, "移送元"));
-            cells.Add(new OutputCell(row, 37, "移送方法ほか"));
-            row++;
-            foreach (var transfer in transfers)
-            {
-                var itemStartRow = row;
-                cells.Add(new OutputCell(row, 1, transfer.Target));
-                if (transfer.Expression is not null &&
-                    DirectCaseExpressions(transfer.Expression).Count > 0)
-                {
-                    if (transfer.RenderCaseInMethod && transfer.Source.Length > 0)
-                    {
-                        cells.Add(new OutputCell(row, 19, transfer.Source));
-                    }
-                    var consumedRows = transfer.RenderCaseInMethod
-                        ? WriteScalarExpression(
-                            cells,
-                            sql,
-                            transfer.Expression,
-                            row,
-                            displayName: null,
-                            valueColumn: 37,
-                            markerColumn: 51,
-                            detailColumn: 52)
-                        : WriteScalarExpression(
-                            cells,
-                            sql,
-                            transfer.Expression,
-                            row,
-                            displayName: null,
-                            valueColumn: 19,
-                            markerColumn: 35,
-                            detailColumn: 37);
-                    row += consumedRows;
-                    if (transfer.RenderCaseInMethod && consumedRows > 1)
-                    {
-                        transferGroups.Add(new OutputSection(
-                            OutputSectionKind.TransferGroup,
-                            itemStartRow,
-                            row - 1));
-                    }
-                    continue;
-                }
-
-                if (transfer.Source.Length > 0)
-                {
-                    cells.Add(new OutputCell(row, 19, transfer.Source));
-                }
-                if (transfer.Method.Length > 0)
-                {
-                    cells.Add(new OutputCell(row, 37, transfer.Method));
-                }
-                row++;
-            }
-            sections.Add(new OutputSection(OutputSectionKind.Transfer, startRow, row - 1));
-            sections.AddRange(transferGroups);
+            WriteTransferSection(cells, sections, sql, transfers, ref row);
         }
 
         WriteJoinSection(cells, sections, sql, fromClause, mappings, ref row);
@@ -554,6 +592,109 @@ public static class OutputSheetPlanBuilder
         }
 
         return new OutputSheetPlan(cells, sections, row - 1, false);
+    }
+
+    /// <summary>
+    /// UNIONの各SELECT分岐を独立した移送パターンとして構成
+    /// </summary>
+    private static OutputSheetPlan BuildPatternedDataTransferPlan(
+        string sql,
+        string references,
+        IReadOnlyList<IReadOnlyList<TransferItem>> transferPatterns)
+    {
+        var cells = new List<OutputCell>
+        {
+            new(1, 1, "＜データ移送表＞"),
+            new(2, 1, "参照テーブル: " + references)
+        };
+        var sections = new List<OutputSection>
+        {
+            new(OutputSectionKind.Reference, 2, 2)
+        };
+        var row = 3;
+
+        for (var index = 0; index < transferPatterns.Count; index++)
+        {
+            cells.Add(new OutputCell(row, 1, $"＜移送パターン{index + 1}＞"));
+            row++;
+            WriteTransferSection(cells, sections, sql, transferPatterns[index], ref row);
+        }
+
+        return new OutputSheetPlan(cells, sections, row - 1, false);
+    }
+
+    /// <summary>
+    /// データ移送表の見出し、項目、CASEグループを共通形式で追加
+    /// </summary>
+    private static void WriteTransferSection(
+        ICollection<OutputCell> cells,
+        ICollection<OutputSection> sections,
+        string sql,
+        IReadOnlyList<TransferItem> transfers,
+        ref int row)
+    {
+        var startRow = row;
+        var transferGroups = new List<OutputSection>();
+        cells.Add(new OutputCell(row, 1, "項目"));
+        cells.Add(new OutputCell(row, 19, "移送元"));
+        cells.Add(new OutputCell(row, 37, "移送方法ほか"));
+        row++;
+        foreach (var transfer in transfers)
+        {
+            var itemStartRow = row;
+            cells.Add(new OutputCell(row, 1, transfer.Target));
+            if (transfer.Expression is not null &&
+                DirectCaseExpressions(transfer.Expression).Count > 0)
+            {
+                if (transfer.RenderCaseInMethod && transfer.Source.Length > 0)
+                {
+                    cells.Add(new OutputCell(row, 19, transfer.Source));
+                }
+                var consumedRows = transfer.RenderCaseInMethod
+                    ? WriteScalarExpression(
+                        cells,
+                        sql,
+                        transfer.Expression,
+                        row,
+                        displayName: null,
+                        valueColumn: 37,
+                        markerColumn: 51,
+                        detailColumn: 52)
+                    : WriteScalarExpression(
+                        cells,
+                        sql,
+                        transfer.Expression,
+                        row,
+                        displayName: null,
+                        valueColumn: 19,
+                        markerColumn: 35,
+                        detailColumn: 37);
+                row += consumedRows;
+                if (transfer.RenderCaseInMethod && consumedRows > 1)
+                {
+                    transferGroups.Add(new OutputSection(
+                        OutputSectionKind.TransferGroup,
+                        itemStartRow,
+                        row - 1));
+                }
+                continue;
+            }
+
+            if (transfer.Source.Length > 0)
+            {
+                cells.Add(new OutputCell(row, 19, transfer.Source));
+            }
+            if (transfer.Method.Length > 0)
+            {
+                cells.Add(new OutputCell(row, 37, transfer.Method));
+            }
+            row++;
+        }
+        sections.Add(new OutputSection(OutputSectionKind.Transfer, startRow, row - 1));
+        foreach (var transferGroup in transferGroups)
+        {
+            sections.Add(transferGroup);
+        }
     }
 
     /// <summary>
