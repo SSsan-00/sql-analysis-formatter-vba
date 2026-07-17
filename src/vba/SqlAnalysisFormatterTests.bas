@@ -21,6 +21,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_PreservesLeadingApostropheInOutput
     AnalyzeQueries_DisablesWrappingAfterWritingLongText
     AnalyzeQueries_RendersDeeplyNestedCaseConditions
+    AnalyzeQueries_RendersWrappedUpdateCaseAsTransferMethod
     AnalyzeQueries_HandlesSyntaxCharactersInFieldNames
     AnalyzeQueries_UsesStandaloneTableNameForSingleTable
     AnalyzeQueries_WritesUnsupportedQueryAsIs
@@ -220,6 +221,44 @@ Public Sub AnalyzeQueries_RendersDeeplyNestedCaseConditions()
     AssertCellValue wsOutput.Cells(10, 36), "OR"
     AssertCellValue wsOutput.Cells(10, 38), "tb1.h = 1 " & W(&H2192) & " 'X'"
     AssertCellValue wsOutput.Cells(11, 32), "ELSE " & W(&H2192) & " 'Y'"
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' 外側の式で包まれたUPDATE CASEを移送方法へ展開し、戻り値の列を読点区切りで移送元へ出力することを確認
+Public Sub AnalyzeQueries_RendersWrappedUpdateCaseAsTransferMethod()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    PutDefinition wsRef, 2, "tb1", "users", "name", "name"
+    PutDefinition wsRef, 3, "tb2", "import_users", "name", "name"
+    wsSql.Cells(2, COL_SQL).Value = _
+        "UPDATE tb1 SET display_name = CAST(CASE " & _
+        "WHEN tb2.status IS NULL THEN tb1.name ELSE tb2.name END " & _
+        "AS NVARCHAR(100)) FROM users AS tb1 LEFT JOIN import_users AS tb2 " & _
+        "ON tb1.user_id = tb2.user_id"
+
+    AnalyzeQueries False
+
+    AssertCellValue wsOutput.Cells(4, 19), _
+        "tb1.name" & W(&H3001) & "tb2.name"
+    AssertCellValue wsOutput.Cells(4, 37), _
+        "CAST(CASE" & W(&H7D50, &H679C) & " AS NVARCHAR(100))"
+    AssertCellValue wsOutput.Cells(4, 51), W(&H203B)
+    AssertCellValue wsOutput.Cells(4, 52), _
+        "tb2.status IS NULL " & W(&H2192) & " tb1.name"
+    AssertCellValue wsOutput.Cells(5, 52), _
+        "ELSE " & W(&H2192) & " tb2.name"
 End Sub
 
 '@TestMethod("SetupWorkbook")

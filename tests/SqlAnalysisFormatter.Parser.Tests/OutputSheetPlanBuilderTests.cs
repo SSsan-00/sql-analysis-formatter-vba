@@ -1453,7 +1453,7 @@ public sealed class OutputSheetPlanBuilderTests
             cell.Column == 1 && cell.Value == "＜データ移送表＞").Row;
         var transferRow = transferTitleRow + 3;
         Assert.AreEqual("氏名", CellValue(plan, transferRow, 1));
-        Assert.AreEqual("tb1.氏名, tb2.氏名", CellValue(plan, transferRow, 19));
+        Assert.AreEqual("tb1.氏名、tb2.氏名", CellValue(plan, transferRow, 19));
         Assert.AreEqual("CASE結果", CellValue(plan, transferRow, 37));
         Assert.AreEqual("※", CellValue(plan, transferRow, 51));
         Assert.AreEqual("tb2.状態 IS NULL → tb1.氏名", CellValue(plan, transferRow, 52));
@@ -1829,7 +1829,7 @@ public sealed class OutputSheetPlanBuilderTests
         var plan = OutputSheetPlanBuilder.Build(sql, []);
 
         Assert.IsFalse(plan.IsFallback);
-        Assert.AreEqual("tb1.氏名, tb2.氏名", CellValue(plan, 4, 19));
+        Assert.AreEqual("tb1.氏名、tb2.氏名", CellValue(plan, 4, 19));
         Assert.AreEqual("CASE結果", CellValue(plan, 4, 37));
         Assert.AreEqual("※", CellValue(plan, 4, 51));
         Assert.AreEqual("tb2.状態 IS NULL → tb1.氏名", CellValue(plan, 4, 52));
@@ -1838,6 +1838,69 @@ public sealed class OutputSheetPlanBuilderTests
             section.Kind == OutputSectionKind.TransferGroup &&
             section.StartRow == 4 &&
             section.EndRow == 5));
+    }
+
+    /// <summary>
+    /// CASTで包まれたUPDATE SETのCASEを移送方法へ展開し、戻り値の列だけを移送元へ列挙することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_ExpandsCastWrappedUpdateCaseInTransferMethod()
+    {
+        const string sql = """
+            UPDATE tb1
+            SET
+                表示名 = CAST(
+                    CASE
+                        WHEN tb2.状態 IS NULL THEN tb1.氏名
+                        ELSE tb2.氏名
+                    END
+                    AS NVARCHAR(100)
+                )
+            FROM
+                users AS tb1
+                LEFT JOIN import_users AS tb2
+                    ON tb1.ユーザーID = tb2.ユーザーID
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("tb1.氏名、tb2.氏名", CellValue(plan, 4, 19));
+        Assert.AreEqual("CAST(CASE結果 AS NVARCHAR(100))", CellValue(plan, 4, 37));
+        Assert.AreEqual("※", CellValue(plan, 4, 51));
+        Assert.AreEqual("tb2.状態 IS NULL → tb1.氏名", CellValue(plan, 4, 52));
+        Assert.AreEqual("ELSE → tb2.氏名", CellValue(plan, 5, 52));
+    }
+
+    /// <summary>
+    /// 任意の関数で多重に包まれたUPDATE SETのCASEも移送方法へ展開することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_ExpandsArbitrarilyWrappedUpdateCaseInTransferMethod()
+    {
+        const string sql = """
+            UPDATE tb1
+            SET
+                表示名 = CONCAT(tb1.接頭辞, UPPER(LTRIM(
+                    CASE
+                        WHEN tb2.状態 IS NULL THEN tb1.氏名
+                        ELSE tb2.氏名
+                    END
+                )))
+            FROM
+                users AS tb1
+                LEFT JOIN import_users AS tb2
+                    ON tb1.ユーザーID = tb2.ユーザーID
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("tb1.接頭辞、tb1.氏名、tb2.氏名", CellValue(plan, 4, 19));
+        Assert.AreEqual("CONCAT(tb1.接頭辞, UPPER(LTRIM(CASE結果)))", CellValue(plan, 4, 37));
+        Assert.AreEqual("※", CellValue(plan, 4, 51));
+        Assert.AreEqual("tb2.状態 IS NULL → tb1.氏名", CellValue(plan, 4, 52));
+        Assert.AreEqual("ELSE → tb2.氏名", CellValue(plan, 5, 52));
     }
 
     /// <summary>

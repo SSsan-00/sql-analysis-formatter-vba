@@ -68,6 +68,7 @@ try {
         'AnalyzeQueries_PreservesLeadingApostropheInOutput',
         'AnalyzeQueries_DisablesWrappingAfterWritingLongText',
         'AnalyzeQueries_RendersDeeplyNestedCaseConditions',
+        'AnalyzeQueries_RendersWrappedUpdateCaseAsTransferMethod',
         'AnalyzeQueries_HandlesSyntaxCharactersInFieldNames',
         'AnalyzeQueries_UsesStandaloneTableNameForSingleTable',
         'AnalyzeQueries_WritesUnsupportedQueryAsIs',

@@ -2509,12 +2509,12 @@ public static class OutputSheetPlanBuilder
         string expressionText,
         ScalarExpression expression)
     {
-        if (expression is SearchedCaseExpression or SimpleCaseExpression)
+        if (DirectCaseExpressions(expression).Count > 0)
         {
-            var sources = CollectCaseResultSources(sql, expression);
+            var sources = CollectCaseAwareSources(sql, expression);
             return new TransferItem(
                 target,
-                string.Join(", ", sources),
+                string.Join("、", sources),
                 expressionText,
                 expression,
                 RenderCaseInMethod: true);
@@ -2556,65 +2556,24 @@ public static class OutputSheetPlanBuilder
     }
 
     /// <summary>
-    /// CASEの条件式を除外し、THENとELSEが返す値の列参照を出現順に収集
+    /// CASEの条件式を除外し、外側の式とTHEN/ELSEが参照する列を出現順に収集
     /// </summary>
-    private static IReadOnlyList<string> CollectCaseResultSources(
+    private static IReadOnlyList<string> CollectCaseAwareSources(
         string sql,
         ScalarExpression expression)
     {
-        var resultExpressions = new List<ScalarExpression>();
-        CollectCaseResultExpressions(expression, resultExpressions);
-
         var sources = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var resultExpression in resultExpressions)
+        foreach (var column in CaseAwareSourceCollector.Collect(expression))
         {
-            foreach (var column in ColumnReferenceCollector.Collect(resultExpression))
+            var source = FragmentText(sql, column);
+            if (seen.Add(source))
             {
-                var source = FragmentText(sql, column);
-                if (seen.Add(source))
-                {
-                    sources.Add(source);
-                }
+                sources.Add(source);
             }
         }
 
         return sources;
-    }
-
-    /// <summary>
-    /// CASEの各戻り値を再帰的に収集
-    /// </summary>
-    private static void CollectCaseResultExpressions(
-        ScalarExpression expression,
-        ICollection<ScalarExpression> results)
-    {
-        switch (expression)
-        {
-            case SearchedCaseExpression searchedCase:
-                foreach (var clause in searchedCase.WhenClauses)
-                {
-                    CollectCaseResultExpressions(clause.ThenExpression, results);
-                }
-                if (searchedCase.ElseExpression is not null)
-                {
-                    CollectCaseResultExpressions(searchedCase.ElseExpression, results);
-                }
-                break;
-            case SimpleCaseExpression simpleCase:
-                foreach (var clause in simpleCase.WhenClauses)
-                {
-                    CollectCaseResultExpressions(clause.ThenExpression, results);
-                }
-                if (simpleCase.ElseExpression is not null)
-                {
-                    CollectCaseResultExpressions(simpleCase.ElseExpression, results);
-                }
-                break;
-            default:
-                results.Add(expression);
-                break;
-        }
     }
 
     /// <summary>
@@ -2803,26 +2762,19 @@ public static class OutputSheetPlanBuilder
     }
 
     /// <summary>
-    /// CASE戻り値の式に含まれる列参照を出現順に収集
+    /// CASE条件を除き、外側の式とCASE戻り値に含まれる列参照を出現順に収集
     /// </summary>
-    private sealed class ColumnReferenceCollector : TSqlFragmentVisitor
+    private sealed class CaseAwareSourceCollector : TSqlFragmentVisitor
     {
         private readonly List<ColumnReferenceExpression> _columns = [];
 
         /// <summary>
-        /// ルートが列参照の場合も含めて列参照を収集
+        /// CASEを含む式から移送元となる列参照を収集
         /// </summary>
         public static IReadOnlyList<ColumnReferenceExpression> Collect(ScalarExpression expression)
         {
-            var collector = new ColumnReferenceCollector();
-            if (expression is ColumnReferenceExpression directColumn)
-            {
-                collector._columns.Add(directColumn);
-            }
-            else
-            {
-                expression.Accept(collector);
-            }
+            var collector = new CaseAwareSourceCollector();
+            expression.Accept(collector);
             return collector._columns;
         }
 
@@ -2832,6 +2784,30 @@ public static class OutputSheetPlanBuilder
         public override void ExplicitVisit(ColumnReferenceExpression node)
         {
             _columns.Add(node);
+        }
+
+        /// <summary>
+        /// 検索CASEはWHEN条件を除き、THENとELSEだけを収集
+        /// </summary>
+        public override void ExplicitVisit(SearchedCaseExpression node)
+        {
+            foreach (var clause in node.WhenClauses)
+            {
+                clause.ThenExpression.Accept(this);
+            }
+            node.ElseExpression?.Accept(this);
+        }
+
+        /// <summary>
+        /// 単純CASEは入力式とWHEN値を除き、THENとELSEだけを収集
+        /// </summary>
+        public override void ExplicitVisit(SimpleCaseExpression node)
+        {
+            foreach (var clause in node.WhenClauses)
+            {
+                clause.ThenExpression.Accept(this);
+            }
+            node.ElseExpression?.Accept(this);
         }
     }
 
