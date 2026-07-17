@@ -22,6 +22,9 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_DisablesWrappingAfterWritingLongText
     AnalyzeQueries_RendersDeeplyNestedCaseConditions
     AnalyzeQueries_NormalizesInvisibleOutputWhitespace
+    AnalyzeQueries_ResolvesQualifiedStarAndMatchingAlias
+    AnalyzeQueries_ResolvesMatchingTemporaryTableDefinition
+    AnalyzeQueries_PreservesUnmatchedTemporaryTableDefinition
     AnalyzeQueries_SeparatesTransferExpressionsFromColumns
     AnalyzeQueries_RendersWrappedUpdateCaseAsTransferMethod
     AnalyzeQueries_HandlesSyntaxCharactersInFieldNames
@@ -255,6 +258,113 @@ Public Sub AnalyzeQueries_NormalizesInvisibleOutputWhitespace()
     AssertCellValue wsOutput.Cells(4, 32), _
         "ELSE " & W(&H2192) & " 'C'"
     AssertCellValue wsOutput.Cells(5, 17), "tb1.name = '1'"
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' 修飾付き全項目と参照列名に一致する式エイリアスを和名表示することを確認
+Public Sub AnalyzeQueries_ResolvesQualifiedStarAndMatchingAlias()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim nameText As String
+    Dim allFieldsText As String
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    nameText = W(&H540D, &H524D)
+    allFieldsText = W(&H5168, &H9805, &H76EE)
+    PutDefinition wsRef, 2, "tb1", UserTableText(), "name", nameText
+    wsSql.Cells(2, COL_SQL).Value = _
+        "SELECT tb1.*, TRIM(tb1.name) AS name FROM users AS tb1"
+
+    AnalyzeQueries False
+
+    AssertCellValue wsOutput.Cells(3, 17), "tb1." & allFieldsText
+    AssertCellValue wsOutput.Cells(4, 17), nameText
+    AssertCellValue wsOutput.Cells(4, 31), W(&H203B)
+    AssertCellValue wsOutput.Cells(4, 32), "TRIM(tb1." & nameText & ")"
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' SELECT INTOの一時テーブル名と和名定義が一致する場合に全項目を移送できることを確認
+Public Sub AnalyzeQueries_ResolvesMatchingTemporaryTableDefinition()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim nameText As String
+    Dim temporaryTableText As String
+    Dim allFieldsText As String
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    nameText = W(&H540D, &H524D)
+    temporaryTableText = W(&H4E00, &H6642) & UserTableText()
+    allFieldsText = W(&H5168, &H9805, &H76EE)
+    PutDefinition wsRef, 2, "tb1", UserTableText(), "name", nameText
+    PutDefinition wsRef, 3, "#wkuser", temporaryTableText, "name", nameText
+    wsSql.Cells(2, COL_SQL).Value = _
+        "SELECT tb1.* INTO #wkuser FROM users AS tb1"
+
+    AnalyzeQueries False
+
+    AssertCellValue wsOutput.Cells(3, 17), "tb1." & allFieldsText
+    AssertCellValue wsOutput.Cells(6, 1), _
+        ReferenceTablesText() & ": " & temporaryTableText
+    AssertCellValue wsOutput.Cells(8, 1), allFieldsText
+    AssertCellValue wsOutput.Cells(8, 19), "tb1." & allFieldsText
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' SELECT INTOの一時テーブル名と和名定義が一致しない場合に未解決表示を使用することを確認
+Public Sub AnalyzeQueries_PreservesUnmatchedTemporaryTableDefinition()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim nameText As String
+    Dim missingNameText As String
+    Dim allFieldsText As String
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    nameText = W(&H540D, &H524D)
+    missingNameText = "(" & W(&H548C, &H540D, &H672A, &H53D6, &H5F97) & ")"
+    allFieldsText = W(&H5168, &H9805, &H76EE)
+    PutDefinition wsRef, 2, "tb1", UserTableText(), "name", nameText
+    PutDefinition wsRef, 3, "#other_work", "other", "name", nameText
+    wsSql.Cells(2, COL_SQL).Value = _
+        "SELECT tb1.* INTO #wkuser FROM users AS tb1"
+
+    AnalyzeQueries False
+
+    AssertCellValue wsOutput.Cells(3, 17), "tb1." & allFieldsText
+    AssertCellValue wsOutput.Cells(6, 1), _
+        ReferenceTablesText() & ": " & missingNameText
+    AssertCellValue wsOutput.Cells(8, 1), allFieldsText
+    AssertCellValue wsOutput.Cells(8, 19), "tb1." & allFieldsText
 End Sub
 
 '@TestMethod("AnalyzeQueries")

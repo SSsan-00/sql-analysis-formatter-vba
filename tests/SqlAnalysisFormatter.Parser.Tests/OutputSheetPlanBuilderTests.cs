@@ -9,6 +9,48 @@ namespace SqlAnalysisFormatter.Parser.Tests;
 public sealed class OutputSheetPlanBuilderTests
 {
     /// <summary>
+    /// 修飾付きアスタリスクを全項目として表示することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_RendersQualifiedStarAsAllFields()
+    {
+        const string sql = "SELECT tb1.* FROM users AS tb1";
+
+        var plan = OutputSheetPlanBuilder.Build(
+            sql,
+            [new("tb1", "ユーザー", "", "")]);
+        var unqualifiedPlan = OutputSheetPlanBuilder.Build(
+            "SELECT * FROM users AS tb1",
+            [new("tb1", "ユーザー", "", "")]);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("参照テーブル: ユーザー[tb1]", CellValue(plan, 2, 1));
+        Assert.AreEqual("tb1.全項目", CellValue(plan, 3, 17));
+        Assert.AreEqual("全項目", CellValue(unqualifiedPlan, 3, 17));
+    }
+
+    /// <summary>
+    /// 式の別名が参照列の物理名と一致する場合は列和名を取得項目名へ使用することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_ResolvesExpressionAliasMatchingReferencedFieldName()
+    {
+        const string sql =
+            "SELECT TRIM(tb1.__SAF_FIELD_R000002__) AS name FROM users AS tb1";
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "ユーザー", "name", "名前", "__SAF_FIELD_R000002__")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("名前", CellValue(plan, 3, 17));
+        Assert.AreEqual("※", CellValue(plan, 3, 31));
+        Assert.AreEqual("TRIM(tb1.名前)", CellValue(plan, 3, 32));
+    }
+
+    /// <summary>
     /// 単純SELECTを基本フレームへ変換できることを確認
     /// </summary>
     [TestMethod]
@@ -2247,26 +2289,83 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
-    /// 一時テーブルの物理名から和名を解決することを確認
+    /// 一時テーブルの物理名と和名定義が一致する場合にテーブルと列の和名を解決することを確認
     /// </summary>
     [TestMethod]
-    public void Build_ResolvesAliasedTemporaryTableByPhysicalName()
+    public void Build_ResolvesTemporaryTableWhenDefinitionMatchesPhysicalName()
     {
-        const string sql = """
-            SELECT
-                t.ID
-            FROM
-                #users AS t
-            """;
+        const string sql =
+            "SELECT wk.__SAF_FIELD_R000002__ FROM #wkuser AS wk";
         MappingDefinition[] mappings =
         [
-            new("#users", "一時ユーザー", "id", "ID")
+            new("#wkuser", "一時ユーザー", "name", "名前", "__SAF_FIELD_R000002__")
         ];
 
         var plan = OutputSheetPlanBuilder.Build(sql, mappings);
 
         Assert.IsFalse(plan.IsFallback);
-        Assert.AreEqual("参照テーブル: 一時ユーザー[t]", CellValue(plan, 2, 1));
+        Assert.AreEqual("参照テーブル: 一時ユーザー[wk]", CellValue(plan, 2, 1));
+        Assert.AreEqual("wk.名前", CellValue(plan, 3, 17));
+    }
+
+    /// <summary>
+    /// SELECT INTOの全項目を一時テーブルへ移送し、対象定義の一致有無を表示へ反映することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_CreatesSelectIntoTransferForQualifiedStar()
+    {
+        const string sql = "SELECT tb1.* INTO #wkuser FROM users AS tb1";
+        MappingDefinition[] matchedMappings =
+        [
+            new("tb1", "ユーザー", "", ""),
+            new("#wkuser", "一時ユーザー", "", "")
+        ];
+        MappingDefinition[] unmatchedMappings =
+        [
+            new("tb1", "ユーザー", "", ""),
+            new("#other_work", "別ワークユーザー", "", "")
+        ];
+
+        var matchedPlan = OutputSheetPlanBuilder.Build(sql, matchedMappings);
+        var unmatchedPlan = OutputSheetPlanBuilder.Build(sql, unmatchedMappings);
+
+        Assert.IsFalse(matchedPlan.IsFallback);
+        Assert.AreEqual("tb1.全項目", CellValue(matchedPlan, 3, 17));
+        var transferTitleRow = matchedPlan.Cells.Single(cell =>
+            cell.Column == 1 && cell.Value == "＜データ移送表＞").Row;
+        Assert.AreEqual(
+            "参照テーブル: 一時ユーザー",
+            CellValue(matchedPlan, transferTitleRow + 1, 1));
+        Assert.AreEqual("全項目", CellValue(matchedPlan, transferTitleRow + 3, 1));
+        Assert.AreEqual("tb1.全項目", CellValue(matchedPlan, transferTitleRow + 3, 19));
+
+        Assert.IsFalse(unmatchedPlan.IsFallback);
+        var unmatchedTransferTitleRow = unmatchedPlan.Cells.Single(cell =>
+            cell.Column == 1 && cell.Value == "＜データ移送表＞").Row;
+        Assert.AreEqual(
+            "参照テーブル: (和名未取得)",
+            CellValue(unmatchedPlan, unmatchedTransferTitleRow + 1, 1));
+    }
+
+    /// <summary>
+    /// 一時テーブルの物理名と和名定義が一致しない場合は未解決表示と物理列名を保持することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_PreservesTemporaryTableNamesWhenDefinitionDoesNotMatch()
+    {
+        const string sql = "SELECT wk.name FROM #wkuser AS wk";
+        MappingDefinition[] mappings =
+        [
+            new("#other_work", "別ワークユーザー", "name", "名前")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(
+            "参照テーブル: (和名未取得)[wk]",
+            CellValue(plan, 2, 1));
+        Assert.AreEqual("wk.name", CellValue(plan, 3, 17));
     }
 
     /// <summary>

@@ -164,6 +164,12 @@ public static class OutputSheetPlanBuilder
         var columns = new List<string>(sourceQuery.SelectElements.Count);
         foreach (var element in sourceQuery.SelectElements)
         {
+            if (element is SelectStarExpression)
+            {
+                columns.Add("全項目");
+                continue;
+            }
+
             if (element is not SelectScalarExpression scalar)
             {
                 throw new UnsupportedOutputException(
@@ -224,6 +230,15 @@ public static class OutputSheetPlanBuilder
         var transfers = new List<TransferItem>(targets.Count);
         for (var index = 0; index < targets.Count; index++)
         {
+            if (selectElements[index] is SelectStarExpression star)
+            {
+                transfers.Add(new TransferItem(
+                    targets[index],
+                    RenderSelectStar(DisplayText(sql, star)),
+                    string.Empty));
+                continue;
+            }
+
             if (selectElements[index] is not SelectScalarExpression scalar)
             {
                 throw new UnsupportedOutputException(
@@ -914,7 +929,14 @@ public static class OutputSheetPlanBuilder
         var itemStartRow = row;
         for (var index = 0; index < query.SelectElements.Count; index++)
         {
-            row += WriteSelectElement(cells, sql, query.SelectElements[index], row, index + 1);
+            row += WriteSelectElement(
+                cells,
+                sql,
+                query,
+                query.SelectElements[index],
+                mappings,
+                row,
+                index + 1);
         }
         if (row > itemStartRow)
         {
@@ -1036,7 +1058,9 @@ public static class OutputSheetPlanBuilder
     private static int WriteSelectElement(
         ICollection<OutputCell> cells,
         string sql,
+        QuerySpecification query,
         SelectElement element,
+        IReadOnlyList<MappingDefinition> mappings,
         int row,
         int itemNumber)
     {
@@ -1049,14 +1073,133 @@ public static class OutputSheetPlanBuilder
 
         if (element is SelectScalarExpression scalar)
         {
-            var alias = scalar.ColumnName is null
-                ? null
-                : FragmentText(sql, scalar.ColumnName);
+            var alias = ResolveSelectElementDisplayName(sql, query, scalar, mappings);
             return WriteScalarExpression(cells, sql, scalar.Expression, row, alias);
         }
 
         cells.Add(new OutputCell(row, 17, RenderSelectElementForDisplay(sql, element)));
         return 1;
+    }
+
+    /// <summary>
+    /// 式の別名が参照列の物理名と一致する場合は対応する列和名へ解決
+    /// </summary>
+    private static string? ResolveSelectElementDisplayName(
+        string sql,
+        QuerySpecification query,
+        SelectScalarExpression scalar,
+        IReadOnlyList<MappingDefinition> mappings)
+    {
+        if (scalar.ColumnName is null)
+        {
+            return null;
+        }
+
+        var alias = FragmentText(sql, scalar.ColumnName);
+        var columns = ColumnReferenceCollector.Collect(scalar.Expression);
+        if (columns.Count == 0)
+        {
+            return alias;
+        }
+
+        var namedTables = query.FromClause?.TableReferences
+            .SelectMany(EnumerateNamedTables)
+            .ToArray() ?? [];
+        var mapping = mappings
+            .Where(item => string.Equals(
+                item.FieldId,
+                alias,
+                StringComparison.OrdinalIgnoreCase))
+            .Where(item =>
+                !string.IsNullOrWhiteSpace(item.FieldName) &&
+                item.FieldName != MissingName)
+            .Where(item => columns.Any(column =>
+                ColumnMatchesMapping(column, item, namedTables)))
+            .OrderBy(item => item.TableId == "-")
+            .FirstOrDefault();
+        return mapping?.FieldName ?? alias;
+    }
+
+    /// <summary>
+    /// 列参照が和名定義の物理列と所属テーブルへ対応するか判定
+    /// </summary>
+    private static bool ColumnMatchesMapping(
+        ColumnReferenceExpression column,
+        MappingDefinition mapping,
+        IReadOnlyList<NamedTableReference> namedTables)
+    {
+        var identifiers = column.MultiPartIdentifier?.Identifiers;
+        if (identifiers is null || identifiers.Count == 0)
+        {
+            return false;
+        }
+
+        var fieldId = identifiers[^1].Value;
+        if (!string.Equals(fieldId, mapping.FieldId, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(fieldId, mapping.FieldName, StringComparison.OrdinalIgnoreCase) &&
+            (mapping.ParserFieldId.Length == 0 ||
+                !string.Equals(
+                    fieldId,
+                    mapping.ParserFieldId,
+                    StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        if (mapping.TableId == "-")
+        {
+            return true;
+        }
+
+        if (identifiers.Count == 1)
+        {
+            return namedTables.Count == 1 &&
+                MappingBelongsToTable(mapping, namedTables[0]);
+        }
+
+        var qualifier = identifiers[^2].Value;
+        if (string.Equals(mapping.TableId, qualifier, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return namedTables.Any(table =>
+            TableMatchesQualifier(table, qualifier) &&
+            MappingBelongsToTable(mapping, table));
+    }
+
+    /// <summary>
+    /// テーブル参照の物理名または別名が列修飾子と一致するか判定
+    /// </summary>
+    private static bool TableMatchesQualifier(
+        NamedTableReference table,
+        string qualifier)
+    {
+        return string.Equals(
+                table.Alias?.Value,
+                qualifier,
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                table.SchemaObject.BaseIdentifier.Value,
+                qualifier,
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// 和名定義がテーブル参照の物理名または別名へ所属するか判定
+    /// </summary>
+    private static bool MappingBelongsToTable(
+        MappingDefinition mapping,
+        NamedTableReference table)
+    {
+        return string.Equals(
+                mapping.TableId,
+                table.Alias?.Value,
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                mapping.TableId,
+                table.SchemaObject.BaseIdentifier.Value,
+                StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -2239,7 +2382,7 @@ public static class OutputSheetPlanBuilder
         return element switch
         {
             SelectScalarExpression scalar => FragmentText(sql, scalar.Expression),
-            SelectStarExpression star => FragmentText(sql, star),
+            SelectStarExpression star => RenderSelectStar(FragmentText(sql, star)),
             _ => FragmentText(sql, element)
         };
     }
@@ -2252,9 +2395,24 @@ public static class OutputSheetPlanBuilder
         return element switch
         {
             SelectScalarExpression scalar => DisplayText(sql, scalar.Expression),
-            SelectStarExpression star => DisplayText(sql, star),
+            SelectStarExpression star => RenderSelectStar(DisplayText(sql, star)),
             _ => DisplayText(sql, element)
         };
+    }
+
+    /// <summary>
+    /// SELECTのアスタリスクを帳票用の全項目表記へ変換
+    /// </summary>
+    private static string RenderSelectStar(string starText)
+    {
+        if (starText == "*")
+        {
+            return "全項目";
+        }
+
+        return starText.EndsWith(".*", StringComparison.Ordinal)
+            ? starText[..^1] + "全項目"
+            : starText;
     }
 
     /// <summary>
