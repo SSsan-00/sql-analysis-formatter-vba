@@ -85,7 +85,7 @@ CASEはSELECT、集計関数、WHERE、HAVING、GROUP BY、ORDER BY、JOIN、TOP
 更新系の移送表では、単純なテーブル列参照だけを`移送元`へ出力します。集計、関数、算術演算、CASTなどの式は`移送方法ほか`へ出力し、式が参照するテーブル列を出現順・重複なしの`、`区切りで`移送元`へ併記します。COUNT(*)、変数、定数など特定列を参照しない式の移送元は空欄にします。
 INSERT SELECTのトップレベルSELECTにある計算式はデータ移送表の移送元または移送方法へ直接対応させ、JOIN、検索条件、グループ、集計条件は`＜DB入出力項目定義＞`へ出力します。
 INSERT SELECTのトップレベルにUNIONまたはUNION ALLがある場合、SELECT表では既存の集合演算表示を使い、データ移送表では各SELECTを`＜移送パターン1＞`、`＜移送パターン2＞`のように分けて同じINSERT対象列へ対応させます。
-INSERT VALUESは対象列を明示した単一行に対応します。複数行、DEFAULT VALUES、INSERT EXECUTEは原因付きでフォールバックします。
+INSERT VALUESは対象列を明示した単一行と複数行に対応します。複数行では`＜VALUES 1行目＞`、`＜VALUES 2行目＞`のように行ごとのデータ移送表へ分けます。DEFAULT VALUESとINSERT EXECUTEは原因付きでフォールバックします。
 
 SELECT INTOで`AS display_name`のような式エイリアスを和名表示する場合は、`変換定義`のA列を`-`、C列を`display_name`、D列を表示したい和名にします。SQL内の`AS`直後は変換せず、アウトプットの項目名だけをこの定義から解決します。
 
@@ -165,10 +165,10 @@ powershell -ExecutionPolicy Bypass -File tools/run-output-golden-tests.ps1
 回帰テストの処理時間を計測する場合は、`run-output-golden-tests.ps1`に`-MeasurePerformance`を付けます。
 
 `run-vba-tests.ps1`は一時コピーしたブックに本体モジュールとVBAテストモジュールを取り込み、機能テストを実行します。
-`run-output-golden-tests.ps1`は本体モジュールと書式回帰テスト補助を取り込み、登録済み76ケースを比較します。
+`run-output-golden-tests.ps1`は本体モジュールと書式回帰テスト補助を取り込み、登録済み77ケースを比較します。
 保存済みの `SqlAnalysisFormatter.xlsm` にはテストモジュールを残しません。
 
-CRUDテストケースの内容は`tests/CRUD_TEST_CASES.md`、登録済み76出力ケースは`tests/OutputReportCases.json`と`tests/SqlAnalysisFormatter.OutputExpectations.xlsx`にまとめています。ユーザーレビュー待ちの4ケースと実装前レビュー中のSEL-076は[暫定実装ケース](docs/PROVISIONAL_OUTPUT_CASES.md)で確認できます。
+CRUDテストケースの内容は`tests/CRUD_TEST_CASES.md`、登録済み77出力ケースは`tests/OutputReportCases.json`と`tests/SqlAnalysisFormatter.OutputExpectations.xlsx`にまとめています。ユーザーレビュー待ちの4ケースは[暫定実装ケース](docs/PROVISIONAL_OUTPUT_CASES.md)で確認できます。
 
 ### C# parser
 

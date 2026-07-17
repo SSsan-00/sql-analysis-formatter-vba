@@ -947,7 +947,6 @@
     {
       "id": "SEL-076",
       "title": "複数行INSERT VALUES",
-      "review_status": "暫定期待値（ユーザーレビュー待ち）",
       "sql_lines": [
         "insert ",
         "into users(user_id, name, status, created_at) ",

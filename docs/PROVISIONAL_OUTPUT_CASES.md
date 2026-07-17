@@ -21,17 +21,9 @@
 
 SQLはA5:SQL Mk-2 2.21.2の`Ctrl+Q`で実整形し、`tests/ManualOutputCases.json`へ保存している。
 
-## 実装前の期待値レビュー
-
-次のケースは、実装前に出力イメージを確認するための推測期待値である。`tests/SqlAnalysisFormatter.OutputExpectations.xlsx`にはレビュー用シートを追加済みだが、`tests/OutputReportCases.json`には未登録のため、76件の回帰テスト対象には含まれない。
-
-| ケース | SQL概要 | 暫定期待値 |
-| --- | --- | --- |
-| SEL-076 | 複数行INSERT VALUES | `＜VALUES 1行目＞`、`＜VALUES 2行目＞`の順に、行ごとに独立したデータ移送表を出力する。各ラベルは表の外に置き、各表本体だけを外枠で囲う |
-
 ## 現在の制約
 
-- INSERT VALUESは対象列を明示した単一行だけを表形式へ変換する。SEL-076の複数行VALUESは期待値レビュー後に実装する。
+- INSERT VALUESは対象列を明示した単一行と複数行を表形式へ変換する。複数行は`＜VALUES n行目＞`ごとの移送表へ分ける。
 - DEFAULT VALUES、INSERT EXECUTEは原因付きフォールバックとする。
 - INSERT SELECTのUNIONとUNION ALLは各SELECTを移送パターンへ分けて出力する。EXCEPTとINTERSECTを直接ソースにする場合は原因付きフォールバックとする。
 

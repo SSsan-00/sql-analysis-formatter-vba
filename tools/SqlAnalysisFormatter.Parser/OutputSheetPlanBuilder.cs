@@ -408,10 +408,11 @@ public static class OutputSheetPlanBuilder
             specification.Target,
             mappings,
             includeIdentifier: false);
-        var transferPlan = BuildPatternedDataTransferPlan(
+        var transferPlan = BuildLabeledDataTransferPlan(
             sql,
             targetDisplay,
-            transferPatterns);
+            transferPatterns,
+            index => $"＜移送パターン{index + 1}＞");
         plans.Add(ReplaceSubqueries(transferPlan, sql, sourceChildren));
 
         return CombinePlans(plans);
@@ -435,7 +436,7 @@ public static class OutputSheetPlanBuilder
     }
 
     /// <summary>
-    /// 単一行のINSERT VALUESをデータ移送表へ変換
+    /// INSERT VALUESを行数に応じたデータ移送表へ変換
     /// </summary>
     private static OutputSheetPlan BuildInsertValues(
         string sql,
@@ -448,38 +449,55 @@ public static class OutputSheetPlanBuilder
             return CreateFallback(sql, "未対応のINSERT形式: DEFAULT VALUES", valuesSource);
         }
 
-        if (valuesSource.RowValues.Count != 1)
-        {
-            return CreateFallback(sql, "INSERT VALUESの複数行入力は未対応", valuesSource);
-        }
-
-        var values = valuesSource.RowValues[0].ColumnValues;
-        if (specification.Columns.Count == 0 || specification.Columns.Count != values.Count)
+        if (specification.Columns.Count == 0 || valuesSource.RowValues.Count == 0)
         {
             return CreateFallback(
                 sql,
-                "INSERT VALUESの対象列数と値数が一致しません",
+                "INSERT VALUESの対象列または値が指定されていません",
                 valuesSource);
         }
 
-        var transfers = new List<TransferItem>(values.Count);
-        for (var index = 0; index < values.Count; index++)
+        var transferRows = new List<IReadOnlyList<TransferItem>>(valuesSource.RowValues.Count);
+        for (var rowIndex = 0; rowIndex < valuesSource.RowValues.Count; rowIndex++)
         {
-            transfers.Add(CreateCaseAwareTransferItem(
-                sql,
-                FragmentText(sql, specification.Columns[index]),
-                FragmentText(sql, values[index]),
-                values[index]));
+            var values = valuesSource.RowValues[rowIndex].ColumnValues;
+            if (specification.Columns.Count != values.Count)
+            {
+                var reason = valuesSource.RowValues.Count == 1
+                    ? "INSERT VALUESの対象列数と値数が一致しません"
+                    : $"INSERT VALUESの対象列数と{rowIndex + 1}行目の値数が一致しません";
+                return CreateFallback(sql, reason, valuesSource.RowValues[rowIndex]);
+            }
+
+            var transfers = new List<TransferItem>(values.Count);
+            for (var columnIndex = 0; columnIndex < values.Count; columnIndex++)
+            {
+                transfers.Add(CreateCaseAwareTransferItem(
+                    sql,
+                    FragmentText(sql, specification.Columns[columnIndex]),
+                    FragmentText(sql, values[columnIndex]),
+                    values[columnIndex]));
+            }
+            transferRows.Add(transfers);
         }
 
         var targetDisplay = BuildTargetTableDisplay(
             specification.Target,
             mappings,
             includeIdentifier: false);
+        if (transferRows.Count > 1)
+        {
+            return BuildLabeledDataTransferPlan(
+                sql,
+                targetDisplay,
+                transferRows,
+                index => $"＜VALUES {index + 1}行目＞");
+        }
+
         return BuildDataTransferPlan(
             sql,
             targetDisplay,
-            transfers,
+            transferRows[0],
             null,
             null,
             mappings);
@@ -595,12 +613,13 @@ public static class OutputSheetPlanBuilder
     }
 
     /// <summary>
-    /// UNIONの各SELECT分岐を独立した移送パターンとして構成
+    /// 複数の移送項目群をラベル付きの独立したデータ移送表として構成
     /// </summary>
-    private static OutputSheetPlan BuildPatternedDataTransferPlan(
+    private static OutputSheetPlan BuildLabeledDataTransferPlan(
         string sql,
         string references,
-        IReadOnlyList<IReadOnlyList<TransferItem>> transferPatterns)
+        IReadOnlyList<IReadOnlyList<TransferItem>> transferPatterns,
+        Func<int, string> buildLabel)
     {
         var cells = new List<OutputCell>
         {
@@ -615,7 +634,7 @@ public static class OutputSheetPlanBuilder
 
         for (var index = 0; index < transferPatterns.Count; index++)
         {
-            cells.Add(new OutputCell(row, 1, $"＜移送パターン{index + 1}＞"));
+            cells.Add(new OutputCell(row, 1, buildLabel(index)));
             row++;
             WriteTransferSection(cells, sections, sql, transferPatterns[index], ref row);
         }

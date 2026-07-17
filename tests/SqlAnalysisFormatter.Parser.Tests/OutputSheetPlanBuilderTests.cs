@@ -1622,6 +1622,114 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
+    /// 複数行のINSERT VALUESを行ごとの独立したデータ移送表へ変換することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_CreatesMultiRowInsertValuesTransferFrames()
+    {
+        const string sql = """
+            INSERT INTO users(ユーザーID, 氏名, 状態, 作成日時)
+            VALUES
+                (@user_id_1, @name_1, 'ACTIVE', sysdatetime())
+                , (@user_id_2, @name_2, 'PENDING', sysdatetime())
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, [new("users", "ユーザー", "", "")]);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(14, plan.RowCount);
+        AssertCells(
+            plan,
+            (1, 1, "＜データ移送表＞"),
+            (2, 1, "参照テーブル: ユーザー"),
+            (3, 1, "＜VALUES 1行目＞"),
+            (4, 1, "項目"),
+            (4, 19, "移送元"),
+            (4, 37, "移送方法ほか"),
+            (5, 1, "ユーザーID"),
+            (5, 37, "@user_id_1"),
+            (6, 1, "氏名"),
+            (6, 37, "@name_1"),
+            (7, 1, "状態"),
+            (7, 37, "'ACTIVE'"),
+            (8, 1, "作成日時"),
+            (8, 37, "sysdatetime()"),
+            (9, 1, "＜VALUES 2行目＞"),
+            (10, 1, "項目"),
+            (10, 19, "移送元"),
+            (10, 37, "移送方法ほか"),
+            (11, 1, "ユーザーID"),
+            (11, 37, "@user_id_2"),
+            (12, 1, "氏名"),
+            (12, 37, "@name_2"),
+            (13, 1, "状態"),
+            (13, 37, "'PENDING'"),
+            (14, 1, "作成日時"),
+            (14, 37, "sysdatetime()"));
+        Assert.HasCount(3, plan.Sections);
+        Assert.AreEqual(OutputSectionKind.Transfer, plan.Sections[1].Kind);
+        Assert.AreEqual(4, plan.Sections[1].StartRow);
+        Assert.AreEqual(8, plan.Sections[1].EndRow);
+        Assert.AreEqual(OutputSectionKind.Transfer, plan.Sections[2].Kind);
+        Assert.AreEqual(10, plan.Sections[2].StartRow);
+        Assert.AreEqual(14, plan.Sections[2].EndRow);
+        Assert.IsFalse(plan.Sections.Any(section => section.StartRow is 3 or 9));
+    }
+
+    /// <summary>
+    /// 複数行VALUESでは各行の値数がINSERT対象列数と一致する必要があることを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_FallsBackWhenMultiRowInsertValuesCountDiffers()
+    {
+        const string sql = """
+            INSERT INTO users(ユーザーID, 氏名)
+            VALUES
+                (@user_id_1, @name_1)
+                , (@user_id_2)
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsTrue(plan.IsFallback);
+        StringAssert.Contains(plan.FallbackReason, "2行目");
+        StringAssert.Contains(plan.FallbackReason, "値数が一致しません");
+    }
+
+    /// <summary>
+    /// 複数行VALUESの各CASEをそれぞれの移送方法内で展開することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_ExpandsCaseInsideEachMultiRowInsertValuesFrame()
+    {
+        const string sql = """
+            INSERT INTO users(状態)
+            VALUES
+                (CASE WHEN @active_1 = 1 THEN 'ACTIVE' ELSE 'INACTIVE' END)
+                , (CASE WHEN @active_2 = 1 THEN 'ACTIVE' ELSE 'INACTIVE' END)
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, [new("users", "ユーザー", "", "")]);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(10, plan.RowCount);
+        Assert.AreEqual("＜VALUES 1行目＞", CellValue(plan, 3, 1));
+        Assert.AreEqual("@active_1 = 1 → 'ACTIVE'", CellValue(plan, 5, 52));
+        Assert.AreEqual("ELSE → 'INACTIVE'", CellValue(plan, 6, 52));
+        Assert.AreEqual("＜VALUES 2行目＞", CellValue(plan, 7, 1));
+        Assert.AreEqual("@active_2 = 1 → 'ACTIVE'", CellValue(plan, 9, 52));
+        Assert.AreEqual("ELSE → 'INACTIVE'", CellValue(plan, 10, 52));
+        Assert.IsTrue(plan.Sections.Any(section =>
+            section.Kind == OutputSectionKind.TransferGroup &&
+            section.StartRow == 5 &&
+            section.EndRow == 6));
+        Assert.IsTrue(plan.Sections.Any(section =>
+            section.Kind == OutputSectionKind.TransferGroup &&
+            section.StartRow == 9 &&
+            section.EndRow == 10));
+    }
+
+    /// <summary>
     /// INSERT VALUESの列値を返さないCASEを移送方法へ置き、同一項目を1つの枠にすることを確認
     /// </summary>
     [TestMethod]

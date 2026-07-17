@@ -1685,6 +1685,7 @@ ORDER BY内のIIFは分岐へ展開せず、式全体をソートキーとして
 SELECT DISTINCTは取得項目より上の`重複除外`行へ`DISTINCT`と表示します。
 SELECT INTOとINSERT SELECTのトップレベルSELECTは人工的なサブクエリにせず、`＜DB入出力項目定義＞`の取得式を`＜データ移送表＞`へ直接対応させます。実在するサブクエリ、CTE、派生テーブルだけは先にサブクエリ表として表示します。
 INSERT SELECTのトップレベルにUNIONまたはUNION ALLがある場合、SELECT側の集合演算表示は維持し、データ移送表側では左から順に`＜移送パターン1＞`、`＜移送パターン2＞`として各取得式をINSERT対象列へ対応させます。
+複数行のINSERT VALUESは、SQLに記述された順に`＜VALUES 1行目＞`、`＜VALUES 2行目＞`として独立したデータ移送表へ分け、各ラベルは表本体の外に置きます。
 未対応のクエリは和名変換後SQLをA列へ1行ずつ出力し、1行空けてフォールバック原因を表示します。
 
 ## ユーザー確認済みの追加期待値ケース
@@ -1718,6 +1719,7 @@ INSERT SELECTのトップレベルにUNIONまたはUNION ALLがある場合、SE
 | SEL-070 | 複合WHEN条件のCASEを2列インデントで階層表示 |
 | SEL-071 | UPDATE SETのCASEを移送方法へ配置し、同一項目の複数行を1つの枠で表示 |
 | SEL-060 | INSERT VALUESの変数・定数・関数を移送方法へ配置し、テーブル列を参照しない移送元を空欄表示 |
+| SEL-076 | 複数行INSERT VALUESを行ごとの独立したデータ移送表へ分けて表示 |
 | SEL-077 | INSERT SELECT内のUNION ALLをSELECT表と分岐別の移送パターンへ分けて表示 |
 
 各SQLはScriptDomで構文エラーがないことと、A5M2 `Ctrl+Q`の実整形結果を確認済みです。
@@ -1733,4 +1735,4 @@ INSERT SELECTのトップレベルにUNIONまたはUNION ALLがある場合、SE
 | SEL-074 | OFFSET内のCASE | 暫定確定・レビュー待ち |
 | SEL-075 | 取得結果を直接返すCASE | 暫定確定・レビュー待ち |
 
-SEL-060、SEL-062からSEL-075、SEL-077はA5M2 2.21.2の`Ctrl+Q`で実整形した入力を使用しています。
+SEL-060、SEL-062からSEL-077はA5M2 2.21.2の`Ctrl+Q`で実整形した入力を使用しています。
