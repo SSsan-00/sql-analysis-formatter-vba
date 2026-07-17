@@ -22,6 +22,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_DisablesWrappingAfterWritingLongText
     AnalyzeQueries_RendersDeeplyNestedCaseConditions
     AnalyzeQueries_NormalizesInvisibleOutputWhitespace
+    AnalyzeQueries_SeparatesTransferExpressionsFromColumns
     AnalyzeQueries_RendersWrappedUpdateCaseAsTransferMethod
     AnalyzeQueries_HandlesSyntaxCharactersInFieldNames
     AnalyzeQueries_UsesStandaloneTableNameForSingleTable
@@ -254,6 +255,39 @@ Public Sub AnalyzeQueries_NormalizesInvisibleOutputWhitespace()
     AssertCellValue wsOutput.Cells(4, 32), _
         "ELSE " & W(&H2192) & " 'C'"
     AssertCellValue wsOutput.Cells(5, 17), "tb1.name = '1'"
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' 更新系の集計式と算術式を移送方法へ、参照列を読点区切りで移送元へ出力することを確認
+Public Sub AnalyzeQueries_SeparatesTransferExpressionsFromColumns()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    PutDefinition wsRef, 2, "tb1", "orders", "amount", "amount"
+    wsSql.Cells(2, COL_SQL).Value = _
+        "INSERT INTO order_summary(total_amount, gross_amount) " & _
+        "SELECT SUM(tb1.amount), tb1.amount + tb1.tax + tb1.amount " & _
+        "FROM orders AS tb1"
+
+    AnalyzeQueries False
+
+    AssertCellValue wsOutput.Cells(9, 19), "tb1.amount"
+    AssertCellValue wsOutput.Cells(9, 37), "SUM(tb1.amount)"
+    AssertCellValue wsOutput.Cells(10, 19), _
+        "tb1.amount" & W(&H3001) & "tb1.tax"
+    AssertCellValue wsOutput.Cells(10, 37), _
+        "tb1.amount + tb1.tax + tb1.amount"
 End Sub
 
 '@TestMethod("AnalyzeQueries")

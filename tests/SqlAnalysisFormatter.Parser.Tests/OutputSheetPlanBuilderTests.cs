@@ -994,7 +994,8 @@ public sealed class OutputSheetPlanBuilderTests
         var plan = OutputSheetPlanBuilder.Build(sql, []);
 
         Assert.IsFalse(plan.IsFallback);
-        Assert.AreEqual("COALESCE(tb2.name, 'A  B')", CellValue(plan, 4, 19));
+        Assert.AreEqual("tb2.name", CellValue(plan, 4, 19));
+        Assert.AreEqual("COALESCE(tb2.name, 'A  B')", CellValue(plan, 4, 37));
     }
 
     /// <summary>
@@ -1308,7 +1309,7 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
-    /// 複雑なINSERT SELECTの計算式を移送元へ直接対応させることを確認
+    /// 複雑なINSERT SELECTの計算式を移送方法へ、参照列を移送元へ対応させることを確認
     /// </summary>
     [TestMethod]
     public void Build_CreatesComplexInsertSelectDirectTransferFrames()
@@ -1354,8 +1355,10 @@ public sealed class OutputSheetPlanBuilderTests
         Assert.AreEqual("COUNT(tb2.注文ID) >= @min_order_count", CellValue(plan, 15, 17));
         Assert.AreEqual("＜データ移送表＞", CellValue(plan, 17, 1));
         Assert.AreEqual("参照テーブル: ユーザー集計", CellValue(plan, 18, 1));
-        Assert.AreEqual("COALESCE(tb1.氏名, tb1.メール)", CellValue(plan, 21, 19));
-        Assert.AreEqual("COUNT(tb2.注文ID)", CellValue(plan, 22, 19));
+        Assert.AreEqual("tb1.氏名、tb1.メール", CellValue(plan, 21, 19));
+        Assert.AreEqual("COALESCE(tb1.氏名, tb1.メール)", CellValue(plan, 21, 37));
+        Assert.AreEqual("tb2.注文ID", CellValue(plan, 22, 19));
+        Assert.AreEqual("COUNT(tb2.注文ID)", CellValue(plan, 22, 37));
         Assert.AreEqual("SYSDATETIME()", CellValue(plan, 23, 37));
         Assert.AreEqual("'BATCH'", CellValue(plan, 24, 37));
     }
@@ -1578,9 +1581,44 @@ public sealed class OutputSheetPlanBuilderTests
         Assert.IsFalse(plan.Cells.Any(cell => cell.Value.StartsWith("SQ", StringComparison.Ordinal)));
         Assert.IsTrue(plan.Cells.Any(cell => cell.Column == 1 && cell.Value == "表示名"));
         Assert.IsTrue(plan.Cells.Any(cell => cell.Column == 1 && cell.Value == "ユーザー件数"));
-        Assert.IsTrue(plan.Cells.Any(cell => cell.Column == 19 && cell.Value == "COALESCE(tb1.氏名, tb1.メール)"));
-        Assert.IsTrue(plan.Cells.Any(cell => cell.Column == 19 && cell.Value == "COUNT(tb1.ユーザーID)"));
+        var displayNameRow = plan.Cells.Single(cell => cell.Column == 1 && cell.Value == "表示名").Row;
+        var userCountRow = plan.Cells.Single(cell => cell.Column == 1 && cell.Value == "ユーザー件数").Row;
+        Assert.AreEqual("tb1.氏名、tb1.メール", CellValue(plan, displayNameRow, 19));
+        Assert.AreEqual("COALESCE(tb1.氏名, tb1.メール)", CellValue(plan, displayNameRow, 37));
+        Assert.AreEqual("tb1.ユーザーID", CellValue(plan, userCountRow, 19));
+        Assert.AreEqual("COUNT(tb1.ユーザーID)", CellValue(plan, userCountRow, 37));
         Assert.AreEqual("参照テーブル: ユーザー集計", plan.Cells.Single(cell => cell.Value.StartsWith("参照テーブル: ユーザー集計", StringComparison.Ordinal)).Value);
+    }
+
+    /// <summary>
+    /// 更新系の集計式と算術式を移送方法へ置き、参照列を出現順・重複なしで移送元へ列挙することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_SeparatesTransferExpressionsFromReferencedColumns()
+    {
+        const string sql = """
+            INSERT INTO order_summary(合計金額, 税込金額, 行数)
+            SELECT
+                SUM(tb1.金額)
+                , tb1.金額 + tb1.税額 + tb1.金額
+                , COUNT(*)
+            FROM orders AS tb1
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, [new("tb1", "注文", "", "")]);
+
+        Assert.IsFalse(plan.IsFallback);
+        var transferTitleRow = plan.Cells.Single(cell =>
+            cell.Column == 1 && cell.Value == "＜データ移送表＞").Row;
+        var transferRow = transferTitleRow + 3;
+        Assert.AreEqual("tb1.金額", CellValue(plan, transferRow, 19));
+        Assert.AreEqual("SUM(tb1.金額)", CellValue(plan, transferRow, 37));
+        Assert.AreEqual("tb1.金額、tb1.税額", CellValue(plan, transferRow + 1, 19));
+        Assert.AreEqual(
+            "tb1.金額 + tb1.税額 + tb1.金額",
+            CellValue(plan, transferRow + 1, 37));
+        Assert.IsNull(CellValue(plan, transferRow + 2, 19));
+        Assert.AreEqual("COUNT(*)", CellValue(plan, transferRow + 2, 37));
     }
 
     /// <summary>

@@ -2510,18 +2510,50 @@ public static class OutputSheetPlanBuilder
     }
 
     /// <summary>
-    /// 列参照の有無に応じて移送元と移送方法へ振り分け
+    /// 単純な列参照は移送元へ、式は移送方法へ配置して参照列を移送元へ列挙
     /// </summary>
     private static TransferItem CreateTransferItem(
+        string sql,
         string target,
         string expressionText,
         ScalarExpression expression)
     {
-        var visitor = new ColumnReferenceVisitor();
-        expression.Accept(visitor);
-        return visitor.Found
-            ? new TransferItem(target, expressionText, string.Empty, expression)
-            : new TransferItem(target, string.Empty, expressionText, expression);
+        var unwrapped = UnwrapScalarExpression(expression);
+        if (unwrapped is ColumnReferenceExpression directColumn)
+        {
+            return new TransferItem(
+                target,
+                FragmentText(sql, directColumn),
+                string.Empty,
+                expression);
+        }
+
+        if (unwrapped is ScalarSubquery)
+        {
+            return new TransferItem(target, expressionText, string.Empty, expression);
+        }
+
+        var sources = CollectTransferSources(
+            sql,
+            ColumnReferenceCollector.Collect(expression));
+        return new TransferItem(
+            target,
+            string.Join("、", sources),
+            expressionText,
+            expression);
+    }
+
+    /// <summary>
+    /// スカラー式を囲む括弧を除去して直接列参照か判定可能にする
+    /// </summary>
+    private static ScalarExpression UnwrapScalarExpression(ScalarExpression expression)
+    {
+        while (expression is ParenthesisExpression parenthesized)
+        {
+            expression = parenthesized.Expression;
+        }
+
+        return expression;
     }
 
     /// <summary>
@@ -2544,7 +2576,7 @@ public static class OutputSheetPlanBuilder
                 RenderCaseInMethod: true);
         }
 
-        return CreateTransferItem(target, expressionText, expression);
+        return CreateTransferItem(sql, target, expressionText, expression);
     }
 
     /// <summary>
@@ -2586,11 +2618,27 @@ public static class OutputSheetPlanBuilder
         string sql,
         ScalarExpression expression)
     {
+        return CollectTransferSources(
+            sql,
+            CaseAwareSourceCollector.Collect(expression));
+    }
+
+    /// <summary>
+    /// 列参照を出現順・重複なしの移送元表示へ変換
+    /// </summary>
+    private static IReadOnlyList<string> CollectTransferSources(
+        string sql,
+        IEnumerable<ColumnReferenceExpression> columns)
+    {
         var sources = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var column in CaseAwareSourceCollector.Collect(expression))
+        foreach (var column in columns)
         {
             var source = FragmentText(sql, column);
+            if (source == "*" || source.EndsWith(".*", StringComparison.Ordinal))
+            {
+                continue;
+            }
             if (seen.Add(source))
             {
                 sources.Add(source);
@@ -2770,18 +2818,35 @@ public static class OutputSheetPlanBuilder
     private sealed record SubqueryInfo(QueryExpression QueryExpression, string Name, bool IsNamed);
 
     /// <summary>
-    /// 式内の列参照を検出
+    /// 式内の列参照を出現順に収集し、サブクエリ内部は別フレームへ委ねる
     /// </summary>
-    private sealed class ColumnReferenceVisitor : TSqlFragmentVisitor
+    private sealed class ColumnReferenceCollector : TSqlFragmentVisitor
     {
-        public bool Found { get; private set; }
+        private readonly List<ColumnReferenceExpression> _columns = [];
 
         /// <summary>
-        /// 列参照を検出済みに設定
+        /// SQL断片に含まれる列参照を取得
+        /// </summary>
+        public static IReadOnlyList<ColumnReferenceExpression> Collect(TSqlFragment expression)
+        {
+            var collector = new ColumnReferenceCollector();
+            expression.Accept(collector);
+            return collector._columns;
+        }
+
+        /// <summary>
+        /// 列参照を追加
         /// </summary>
         public override void ExplicitVisit(ColumnReferenceExpression node)
         {
-            Found = true;
+            _columns.Add(node);
+        }
+
+        /// <summary>
+        /// スカラーサブクエリ内部の列は親の移送元へ含めない
+        /// </summary>
+        public override void ExplicitVisit(ScalarSubquery node)
+        {
         }
     }
 
