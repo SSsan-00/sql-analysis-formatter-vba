@@ -11,6 +11,8 @@ public static class OutputSheetPlanBuilder
 {
     private const string MissingName = "(和名未取得)";
     private const int WrappedCaseBranchIndentColumns = 8;
+    private const int WrappedMultipleCaseLabelIndentColumns = 14;
+    private const int MultipleCaseBranchIndentColumns = 6;
 
     /// <summary>
     /// 和名変換済みSQLから描画計画を作成
@@ -1423,7 +1425,9 @@ public static class OutputSheetPlanBuilder
             sql,
             cases,
             row,
-            detailColumn + WrappedCaseBranchIndentColumns);
+            detailColumn + (cases.Count == 1
+                ? WrappedCaseBranchIndentColumns
+                : WrappedMultipleCaseLabelIndentColumns));
     }
 
     /// <summary>
@@ -1750,7 +1754,12 @@ public static class OutputSheetPlanBuilder
         for (var index = 0; index < cases.Count; index++)
         {
             cells.Add(new OutputCell(row, column, $"CASE結果{index + 1}"));
-            row += WriteCaseBranches(cells, sql, cases[index], row, column + 2);
+            row += WriteCaseBranches(
+                cells,
+                sql,
+                cases[index],
+                row,
+                column + MultipleCaseBranchIndentColumns);
         }
 
         return Math.Max(1, row - startRow);

@@ -949,7 +949,7 @@ public sealed class OutputSheetPlanBuilderTests
 
     /// <summary>
     /// 同じ式に複数あるCASEを番号付きの結果と分岐へ展開することを確認
-    /// 配置はSEL-078でユーザーレビュー待ち
+    /// CASE結果は外側式から14列、分岐はCASE結果から6列下げる
     /// </summary>
     [TestMethod]
     public void Build_ExpandsMultipleCasesInsideOneExpression()
@@ -966,12 +966,38 @@ public sealed class OutputSheetPlanBuilderTests
 
         Assert.AreEqual(6, plan.RowCount);
         Assert.AreEqual("SUM(CASE結果1) + SUM(CASE結果2)", CellValue(plan, 3, 32));
-        Assert.AreEqual("CASE結果1", CellValue(plan, 3, 40));
-        Assert.AreEqual("tb1.状態 = 'PAID' → tb1.金額", CellValue(plan, 3, 42));
-        Assert.AreEqual("ELSE → 0", CellValue(plan, 4, 42));
-        Assert.AreEqual("CASE結果2", CellValue(plan, 5, 40));
-        Assert.AreEqual("tb1.状態 = 'REFUND' → tb1.金額", CellValue(plan, 5, 42));
-        Assert.AreEqual("ELSE → 0", CellValue(plan, 6, 42));
+        Assert.AreEqual("CASE結果1", CellValue(plan, 3, 46));
+        Assert.AreEqual("tb1.状態 = 'PAID' → tb1.金額", CellValue(plan, 3, 52));
+        Assert.AreEqual("ELSE → 0", CellValue(plan, 4, 52));
+        Assert.AreEqual("CASE結果2", CellValue(plan, 5, 46));
+        Assert.AreEqual("tb1.状態 = 'REFUND' → tb1.金額", CellValue(plan, 5, 52));
+        Assert.AreEqual("ELSE → 0", CellValue(plan, 6, 52));
+    }
+
+    /// <summary>
+    /// 別々のCASE取得項目にエイリアスがあれば人工的なCASE結果名を出さないことを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_UsesAliasesForSeparateCaseResults()
+    {
+        const string sql = """
+            SELECT
+                CASE WHEN tb1.状態 = 'PAID' THEN tb1.金額 ELSE 0 END AS paid_amount,
+                CASE WHEN tb1.状態 = 'REFUND' THEN tb1.金額 ELSE 0 END AS refund_amount
+            FROM
+                orders AS tb1
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, [new("tb1", "注文", "", "")]);
+
+        Assert.AreEqual(6, plan.RowCount);
+        Assert.AreEqual("paid_amount", CellValue(plan, 3, 17));
+        Assert.AreEqual("tb1.状態 = 'PAID' → tb1.金額", CellValue(plan, 3, 32));
+        Assert.AreEqual("ELSE → 0", CellValue(plan, 4, 32));
+        Assert.AreEqual("refund_amount", CellValue(plan, 5, 17));
+        Assert.AreEqual("tb1.状態 = 'REFUND' → tb1.金額", CellValue(plan, 5, 32));
+        Assert.AreEqual("ELSE → 0", CellValue(plan, 6, 32));
+        Assert.IsFalse(plan.Cells.Any(cell => cell.Value.StartsWith("CASE結果", StringComparison.Ordinal)));
     }
 
     /// <summary>

@@ -340,7 +340,6 @@
     },
     {
       "id": "SEL-068",
-      "review_status": "暫定確定（ユーザーレビュー未実施）",
       "sql_lines": ["select", "    sum( ", "        case ", "            when tb1.状態 = 'PAID' ", "                then tb1.金額 ", "            else 0 ", "            end", "    ) as paid_amount ", "from", "    orders as tb1"],
       "tables": { "tb1": "注文" }
     },
@@ -391,6 +390,11 @@
       "id": "SEL-077",
       "sql_lines": ["insert ", "into user_archive(ユーザーID, 氏名) ", "select", "    tb1.ユーザーID", "    , tb1.氏名 ", "from", "    users as tb1 ", "where", "    tb1.状態 = 'ACTIVE' ", "union all", "select", "    tb2.ユーザーID", "    , trim(tb2.氏名) ", "from", "    archived_users as tb2 ", "where", "    tb2.状態 = 'INACTIVE'"],
       "tables": { "user_archive": "ユーザーアーカイブ", "tb1": "ユーザー", "tb2": "退会ユーザー" }
+    },
+    {
+      "id": "SEL-078",
+      "sql_lines": ["select", "    sum( ", "        case ", "            when tb1.状態 = 'PAID' ", "                then tb1.金額 ", "            else 0 ", "            end", "    )", "    + sum( ", "        case ", "            when tb1.状態 = 'REFUND' ", "                then tb1.金額 ", "            else 0 ", "            end", "    ) as net_amount ", "from", "    orders as tb1"],
+      "tables": { "tb1": "注文" }
     }
   ]
 }
