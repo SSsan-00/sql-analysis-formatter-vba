@@ -365,7 +365,6 @@
     },
     {
       "id": "SEL-073",
-      "review_status": "暫定確定（ユーザーレビュー未実施）",
       "sql_lines": ["select", "    top(case when @all_rows = 1 then 100 else 10 end) tb1.ユーザーID ", "from", "    users as tb1"],
       "tables": { "tb1": "ユーザー" }
     },

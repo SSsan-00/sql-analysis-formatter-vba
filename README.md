@@ -168,7 +168,7 @@ powershell -ExecutionPolicy Bypass -File tools/run-output-golden-tests.ps1
 `run-output-golden-tests.ps1`は本体モジュールと書式回帰テスト補助を取り込み、登録済み80ケースを比較します。
 保存済みの `SqlAnalysisFormatter.xlsm` にはテストモジュールを残しません。
 
-CRUDテストケースの内容は`tests/CRUD_TEST_CASES.md`、登録済み80出力ケースは`tests/OutputReportCases.json`と`tests/SqlAnalysisFormatter.OutputExpectations.xlsx`にまとめています。ユーザーレビュー待ちの2ケースは[暫定実装ケース](docs/PROVISIONAL_OUTPUT_CASES.md)で確認できます。
+CRUDテストケースの内容は`tests/CRUD_TEST_CASES.md`、登録済み80出力ケースは`tests/OutputReportCases.json`と`tests/SqlAnalysisFormatter.OutputExpectations.xlsx`にまとめています。ユーザーレビュー待ちの1ケースは[暫定実装ケース](docs/PROVISIONAL_OUTPUT_CASES.md)で確認できます。
 
 ### C# parser
 
