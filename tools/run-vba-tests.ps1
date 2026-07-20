@@ -78,6 +78,7 @@ try {
         'AnalyzeQueries_UsesStandaloneTableNameForSingleTable',
         'AnalyzeQueries_WritesUnsupportedQueryAsIs',
         'AnalyzeQueries_FramesOnlyTableBody',
+        'ClearConfirmMessage_UsesAnalysisResultWording',
         'ClearData_ClearsOutputSheet'
     )
     if ($TestName.Count -gt 0) {

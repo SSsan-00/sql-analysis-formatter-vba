@@ -31,6 +31,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_UsesStandaloneTableNameForSingleTable
     AnalyzeQueries_WritesUnsupportedQueryAsIs
     AnalyzeQueries_FramesOnlyTableBody
+    ClearConfirmMessage_UsesAnalysisResultWording
     ClearData_ClearsOutputSheet
 
     If showMessage Then
@@ -325,7 +326,8 @@ Public Sub AnalyzeQueries_ResolvesMatchingTemporaryTableDefinition()
 
     AssertCellValue wsOutput.Cells(3, 17), "tb1." & allFieldsText
     AssertCellValue wsOutput.Cells(6, 1), _
-        ReferenceTablesText() & ": " & temporaryTableText
+        ReferenceTablesText() & ": " & temporaryTableText & W(&H3001) & _
+        UserTableText() & "[tb1]"
     AssertCellValue wsOutput.Cells(8, 1), allFieldsText
     AssertCellValue wsOutput.Cells(8, 19), "tb1." & allFieldsText
 End Sub
@@ -362,7 +364,8 @@ Public Sub AnalyzeQueries_PreservesUnmatchedTemporaryTableDefinition()
 
     AssertCellValue wsOutput.Cells(3, 17), "tb1." & allFieldsText
     AssertCellValue wsOutput.Cells(6, 1), _
-        ReferenceTablesText() & ": " & missingNameText
+        ReferenceTablesText() & ": " & missingNameText & W(&H3001) & _
+        UserTableText() & "[tb1]"
     AssertCellValue wsOutput.Cells(8, 1), allFieldsText
     AssertCellValue wsOutput.Cells(8, 19), "tb1." & allFieldsText
 End Sub
@@ -610,6 +613,19 @@ Public Sub AnalyzeQueries_WritesUnsupportedQueryAsIs()
     Else
         AssertCellValue wsOutput.Cells(4, 1), ExpectedParserNotFoundReason() & _
             ExpectedFallbackLocation(1, 2)
+    End If
+End Sub
+
+'@TestMethod("ClearData")
+' クリア確認が解析結果を対象として案内することを確認
+Public Sub ClearConfirmMessage_UsesAnalysisResultWording()
+    Dim expected As String
+
+    expected = W(&H89E3, &H6790, &H7D50, &H679C, &H3092, _
+        &H30AF, &H30EA, &H30A2, &H3057, &H307E, &H3059, &H3002, _
+        &H3088, &H308D, &H3057, &H3044, &H3067, &H3059, &H304B, &HFF1F)
+    If ClearConfirmMessage() <> expected Then
+        Fail "Clear confirmation message does not describe analysis results."
     End If
 End Sub
 

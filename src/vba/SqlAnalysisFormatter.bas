@@ -1813,8 +1813,8 @@ Private Function ClearDoneMessage() As String
 End Function
 
 ' クリア確認メッセージを取得
-Private Function ClearConfirmMessage() As String
-    ClearConfirmMessage = W(&H0032, &H884C, &H76EE, &H4EE5, &H964D, &H3092, &H30AF, &H30EA, &H30A2, &H3057, &H307E, &H3059, &H3002, &H3088, &H308D, &H3057, &H3044, &H3067, &H3059, &H304B, &HFF1F)
+Public Function ClearConfirmMessage() As String
+    ClearConfirmMessage = W(&H89E3, &H6790, &H7D50, &H679C, &H3092, &H30AF, &H30EA, &H30A2, &H3057, &H307E, &H3059, &H3002, &H3088, &H308D, &H3057, &H3044, &H3067, &H3059, &H304B, &HFF1F)
 End Function
 
 ' 確認ダイアログのタイトルを取得
