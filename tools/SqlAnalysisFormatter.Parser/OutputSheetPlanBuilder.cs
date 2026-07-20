@@ -1514,15 +1514,24 @@ public static class OutputSheetPlanBuilder
         }
 
         var alias = FragmentText(sql, scalar.ColumnName);
+        var namedTables = query.FromClause?.TableReferences
+            .SelectMany(EnumerateNamedTables)
+            .ToArray() ?? [];
+        if (DirectCaseExpressions(scalar.Expression).Count > 0)
+        {
+            return ResolveCaseAliasFieldName(
+                scalar.Expression,
+                alias,
+                mappings,
+                namedTables) ?? alias;
+        }
+
         var columns = ColumnReferenceCollector.Collect(scalar.Expression);
         if (columns.Count == 0)
         {
             return alias;
         }
 
-        var namedTables = query.FromClause?.TableReferences
-            .SelectMany(EnumerateNamedTables)
-            .ToArray() ?? [];
         var mapping = mappings
             .Where(item => string.Equals(
                 item.FieldId,
@@ -1536,6 +1545,185 @@ public static class OutputSheetPlanBuilder
             .OrderBy(item => item.TableId == "-")
             .FirstOrDefault();
         return mapping?.FieldName ?? alias;
+    }
+
+    /// <summary>
+    /// CASEの全結果枝が同じ物理列名・和名へ解決できる場合だけ列和名を返す
+    /// </summary>
+    private static string? ResolveCaseAliasFieldName(
+        ScalarExpression expression,
+        string alias,
+        IReadOnlyList<MappingDefinition> mappings,
+        IReadOnlyList<NamedTableReference> namedTables)
+    {
+        var terminalColumns = new List<ColumnReferenceExpression>();
+        if (!TryCollectCaseTerminalColumns(expression, terminalColumns))
+        {
+            return null;
+        }
+
+        string? commonFieldName = null;
+        foreach (var column in terminalColumns)
+        {
+            if (!TryResolveCaseColumnFieldName(
+                    column,
+                    alias,
+                    mappings,
+                    namedTables,
+                    out var fieldName))
+            {
+                return null;
+            }
+
+            if (commonFieldName is null)
+            {
+                commonFieldName = fieldName;
+            }
+            else if (!string.Equals(
+                         commonFieldName,
+                         fieldName,
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+        }
+
+        return commonFieldName;
+    }
+
+    /// <summary>
+    /// CASE条件を除外し、全THEN・ELSEの末端が単一列由来の場合だけ列を収集
+    /// </summary>
+    private static bool TryCollectCaseTerminalColumns(
+        ScalarExpression expression,
+        ICollection<ColumnReferenceExpression> terminalColumns)
+    {
+        var cases = DirectCaseExpressions(expression);
+        if (cases.Count == 0)
+        {
+            var columns = ColumnReferenceCollector.Collect(expression);
+            if (columns.Count != 1)
+            {
+                return false;
+            }
+
+            terminalColumns.Add(columns[0]);
+            return true;
+        }
+
+        var expressionColumns = ColumnReferenceCollector.Collect(expression);
+        if (expressionColumns.Any(column =>
+                !cases.Any(caseExpression =>
+                    ContainsFragment(caseExpression, column))))
+        {
+            return false;
+        }
+
+        foreach (var caseExpression in cases)
+        {
+            if (!TryCollectCaseBranchColumns(caseExpression, terminalColumns))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// 検索CASE・単純CASEの全結果枝を再帰し、ELSE欠落を不成立とする
+    /// </summary>
+    private static bool TryCollectCaseBranchColumns(
+        ScalarExpression expression,
+        ICollection<ColumnReferenceExpression> terminalColumns)
+    {
+        switch (UnwrapScalarExpression(expression))
+        {
+            case SearchedCaseExpression searched:
+                if (searched.ElseExpression is null)
+                {
+                    return false;
+                }
+
+                foreach (var clause in searched.WhenClauses)
+                {
+                    if (!TryCollectCaseTerminalColumns(
+                            clause.ThenExpression,
+                            terminalColumns))
+                    {
+                        return false;
+                    }
+                }
+
+                return TryCollectCaseTerminalColumns(
+                    searched.ElseExpression,
+                    terminalColumns);
+
+            case SimpleCaseExpression simple:
+                if (simple.ElseExpression is null)
+                {
+                    return false;
+                }
+
+                foreach (var clause in simple.WhenClauses)
+                {
+                    if (!TryCollectCaseTerminalColumns(
+                            clause.ThenExpression,
+                            terminalColumns))
+                    {
+                        return false;
+                    }
+                }
+
+                return TryCollectCaseTerminalColumns(
+                    simple.ElseExpression,
+                    terminalColumns);
+
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// CASE末端列を別名と同じ物理列の一意な和名へ解決
+    /// </summary>
+    private static bool TryResolveCaseColumnFieldName(
+        ColumnReferenceExpression column,
+        string alias,
+        IReadOnlyList<MappingDefinition> mappings,
+        IReadOnlyList<NamedTableReference> namedTables,
+        out string fieldName)
+    {
+        var candidates = mappings
+            .Where(item => string.Equals(
+                item.FieldId,
+                alias,
+                StringComparison.OrdinalIgnoreCase))
+            .Where(item =>
+                !string.IsNullOrWhiteSpace(item.FieldName) &&
+                item.FieldName != MissingName)
+            .Where(item => ColumnMatchesMapping(column, item, namedTables))
+            .ToArray();
+        var tableSpecificCandidates = candidates
+            .Where(item => item.TableId != "-")
+            .ToArray();
+        if (tableSpecificCandidates.Length > 0)
+        {
+            candidates = tableSpecificCandidates;
+        }
+
+        var fieldNames = candidates
+            .Select(item => item.FieldName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (fieldNames.Length != 1)
+        {
+            fieldName = string.Empty;
+            return false;
+        }
+
+        fieldName = fieldNames[0];
+        return true;
     }
 
     /// <summary>

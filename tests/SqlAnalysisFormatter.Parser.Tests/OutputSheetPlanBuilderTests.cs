@@ -51,6 +51,235 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
+    /// CASEの全結果枝が同じ物理列名・和名ならエイリアスを列和名へ解決することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_ResolvesCaseAliasWhenEveryResultHasSameFieldIdentity()
+    {
+        const string sql = """
+            SELECT
+                CASE
+                    WHEN tb1.active = 1 THEN TRIM(tb1.__SAF_FIELD_R000002__)
+                    ELSE CAST(tb2.__SAF_FIELD_R000003__ AS nvarchar(100))
+                END AS name
+            FROM users AS tb1
+            CROSS JOIN archived_users AS tb2
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "ユーザー", "name", "名前", "__SAF_FIELD_R000002__"),
+            new("tb2", "退避ユーザー", "name", "名前", "__SAF_FIELD_R000003__")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("名前", CellValue(plan, 3, 17));
+    }
+
+    /// <summary>
+    /// CASE結果の物理列名または和名が一致しなければ元のエイリアスを維持することを確認
+    /// </summary>
+    [TestMethod]
+    [DataRow("name", "旧名")]
+    [DataRow("nickname", "名前")]
+    public void Build_PreservesCaseAliasWhenResultFieldIdentityDiffers(
+        string secondFieldId,
+        string secondFieldName)
+    {
+        const string secondParserFieldId = "__SAF_FIELD_R000003__";
+        const string sql = """
+            SELECT
+                CASE
+                    WHEN tb1.active = 1 THEN tb1.__SAF_FIELD_R000002__
+                    ELSE tb2.__SAF_FIELD_R000003__
+                END AS name
+            FROM users AS tb1
+            CROSS JOIN archived_users AS tb2
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "ユーザー", "name", "名前", "__SAF_FIELD_R000002__"),
+            new("tb2", "退避ユーザー", secondFieldId, secondFieldName, secondParserFieldId)
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("name", CellValue(plan, 3, 17));
+    }
+
+    /// <summary>
+    /// 定数結果または暗黙のNULLがあるCASEでは元のエイリアスを維持することを確認
+    /// </summary>
+    [TestMethod]
+    [DataRow("ELSE 'unknown'")]
+    [DataRow("")]
+    public void Build_PreservesCaseAliasWhenResultIsNotAlwaysColumnDerived(string elseClause)
+    {
+        var sql = $"""
+            SELECT
+                CASE
+                    WHEN tb1.active = 1 THEN tb1.__SAF_FIELD_R000002__
+                    {elseClause}
+                END AS name
+            FROM users AS tb1
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "ユーザー", "name", "名前", "__SAF_FIELD_R000002__")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("name", CellValue(plan, 3, 17));
+    }
+
+    /// <summary>
+    /// CASE条件だけがエイリアスと同名の列を参照しても和名解決しないことを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_DoesNotResolveCaseAliasFromConditionColumn()
+    {
+        const string sql = """
+            SELECT
+                CASE
+                    WHEN tb1.__SAF_FIELD_R000002__ IS NULL
+                        THEN tb1.__SAF_FIELD_R000003__
+                    ELSE tb1.__SAF_FIELD_R000003__
+                END AS name
+            FROM users AS tb1
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "ユーザー", "name", "名前", "__SAF_FIELD_R000002__"),
+            new("tb1", "ユーザー", "age", "年齢", "__SAF_FIELD_R000003__")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("name", CellValue(plan, 3, 17));
+    }
+
+    /// <summary>
+    /// ネストCASEの末端結果がすべて同じ列ならエイリアスを和名解決することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_ResolvesCaseAliasAcrossNestedTerminalResults()
+    {
+        const string sql = """
+            SELECT
+                CASE
+                    WHEN tb1.active = 1 THEN tb1.__SAF_FIELD_R000002__
+                    ELSE CASE
+                        WHEN tb2.active = 1 THEN tb2.__SAF_FIELD_R000003__
+                        ELSE tb3.__SAF_FIELD_R000004__
+                    END
+                END AS name
+            FROM users AS tb1
+            CROSS JOIN archived_users AS tb2
+            CROSS JOIN former_users AS tb3
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "ユーザー", "name", "名前", "__SAF_FIELD_R000002__"),
+            new("tb2", "退避ユーザー", "name", "名前", "__SAF_FIELD_R000003__"),
+            new("tb3", "旧ユーザー", "name", "名前", "__SAF_FIELD_R000004__")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("名前", CellValue(plan, 3, 17));
+    }
+
+    /// <summary>
+    /// CASE結果が同じ列でも別名が物理列名と異なれば別名を維持することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_PreservesCaseAliasWhenAliasDiffersFromCommonFieldId()
+    {
+        const string sql = """
+            SELECT
+                CASE
+                    WHEN tb1.active = 1 THEN tb1.__SAF_FIELD_R000002__
+                    ELSE tb2.__SAF_FIELD_R000003__
+                END AS display_name
+            FROM users AS tb1
+            CROSS JOIN archived_users AS tb2
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "ユーザー", "name", "名前", "__SAF_FIELD_R000002__"),
+            new("tb2", "退避ユーザー", "name", "名前", "__SAF_FIELD_R000003__")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("display_name", CellValue(plan, 3, 17));
+    }
+
+    /// <summary>
+    /// 単純CASEの入力式とWHEN値を除外して結果列だけでエイリアスを解決することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_ResolvesSimpleCaseAliasFromResultColumnsOnly()
+    {
+        const string sql = """
+            SELECT
+                CASE tb1.__SAF_FIELD_R000002__
+                    WHEN 'current' THEN tb1.__SAF_FIELD_R000003__
+                    ELSE tb2.__SAF_FIELD_R000004__
+                END AS name
+            FROM users AS tb1
+            CROSS JOIN archived_users AS tb2
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "ユーザー", "kind", "種別", "__SAF_FIELD_R000002__"),
+            new("tb1", "ユーザー", "name", "名前", "__SAF_FIELD_R000003__"),
+            new("tb2", "退避ユーザー", "name", "名前", "__SAF_FIELD_R000004__")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("名前", CellValue(plan, 3, 17));
+    }
+
+    /// <summary>
+    /// 一つのCASE結果が複数の異なる列を参照する場合は元のエイリアスを維持することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_PreservesCaseAliasWhenTerminalResultReferencesMultipleColumns()
+    {
+        const string sql = """
+            SELECT
+                CASE
+                    WHEN tb1.active = 1
+                        THEN CONCAT(tb1.__SAF_FIELD_R000002__, tb1.__SAF_FIELD_R000003__)
+                    ELSE tb2.__SAF_FIELD_R000004__
+                END AS name
+            FROM users AS tb1
+            CROSS JOIN archived_users AS tb2
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "ユーザー", "name", "名前", "__SAF_FIELD_R000002__"),
+            new("tb1", "ユーザー", "code", "コード", "__SAF_FIELD_R000003__"),
+            new("tb2", "退避ユーザー", "name", "名前", "__SAF_FIELD_R000004__")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("name", CellValue(plan, 3, 17));
+    }
+
+    /// <summary>
     /// 単純SELECTを基本フレームへ変換できることを確認
     /// </summary>
     [TestMethod]

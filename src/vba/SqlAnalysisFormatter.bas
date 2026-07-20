@@ -54,6 +54,9 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     Dim parserQueryText As String
     Dim fallbackReason As String
     Dim replacementValues As Object
+    Dim replacementValuesByRow As Object
+    Dim queryLineRows As Collection
+    Dim qualifications As Collection
 
     Set wsRef = GetReferenceSheet()
     Set wsSql = GetSqlSheet()
@@ -62,6 +65,9 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     Set standaloneMap = CreateTextDictionary()
     Set qualifiedParserMap = CreateTextDictionary()
     Set standaloneParserMap = CreateTextDictionary()
+    Set replacementValuesByRow = CreateTextDictionary()
+    Set queryLineRows = New Collection
+    Set qualifications = New Collection
 
     LoadMappings wsRef, qualifiedMap, standaloneMap, qualifiedParserMap, standaloneParserMap
     If qualifiedMap.Count = 0 And standaloneMap.Count = 0 Then
@@ -88,7 +94,7 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
                 sourceText, qualifiedParserMap, qualifiedKeys, _
                 standaloneParserMap, standaloneKeys, Nothing, False)
             SetOutputCellText wsSql.Cells(rowNumber, COL_RESULT), convertedText
-            WriteReplacementValues wsSql, rowNumber, replacementValues
+            Set replacementValuesByRow(CStr(rowNumber)) = replacementValues
             If Len(convertedQueryText) > 0 Then
                 convertedQueryText = convertedQueryText & vbCrLf
             End If
@@ -97,16 +103,28 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
                 parserQueryText = parserQueryText & vbCrLf
             End If
             parserQueryText = parserQueryText & parserText
+            AddQueryLineRows queryLineRows, rowNumber, parserText
         End If
     Next rowNumber
 
     If Len(convertedQueryText) > 0 Then
-        If Not TryWriteExternalOutputPlan(wsOutput, wsSql, wsRef, parserQueryText, fallbackReason) Then
+        If Not TryWriteExternalOutputPlan( _
+            wsOutput, wsRef, parserQueryText, qualifications, fallbackReason) Then
             WriteFallbackOutput wsOutput, convertedQueryText, fallbackReason
+        Else
+            ApplyReplacementQualifications _
+                replacementValuesByRow, queryLineRows, qualifications
         End If
     Else
         ApplyOutputSheetLayout wsOutput
     End If
+
+    For rowNumber = 2 To lastRow
+        If replacementValuesByRow.Exists(CStr(rowNumber)) Then
+            Set replacementValues = replacementValuesByRow(CStr(rowNumber))
+            WriteReplacementValues wsSql, rowNumber, replacementValues
+        End If
+    Next rowNumber
 
     wsSql.Range(wsSql.Cells(1, COL_RESULT), wsSql.Cells(MaxLong(lastRow, 1), COL_RESULT)).WrapText = False
     SetReplacementColumnsWrapText wsSql, False, LastUsedColumn(wsSql), MaxLong(lastRow, 1)
@@ -732,6 +750,19 @@ Private Sub WriteReplacementValues(ByVal wsSql As Worksheet, ByVal rowNumber As 
     Next index
 End Sub
 
+' parserへ渡す論理行番号とSQL解析シートの行番号を対応付け
+Private Sub AddQueryLineRows( _
+    ByVal queryLineRows As Collection, _
+    ByVal rowNumber As Long, _
+    ByVal queryText As String)
+
+    Dim lineIndex As Long
+
+    For lineIndex = 1 To TextLineCount(queryText)
+        queryLineRows.Add rowNumber
+    Next lineIndex
+End Sub
+
 ' アウトプットシートへコピーボタンを配置
 Private Sub InstallOutputButton(ByVal ws As Worksheet)
     Dim copyButton As Object
@@ -753,9 +784,9 @@ End Sub
 ' 外部parserの描画計画をアウトプットシートへ反映
 Private Function TryWriteExternalOutputPlan( _
     ByVal wsOutput As Worksheet, _
-    ByVal wsSql As Worksheet, _
     ByVal wsRef As Worksheet, _
     ByVal queryText As String, _
+    ByRef qualifications As Collection, _
     ByRef fallbackReason As String) As Boolean
 
     Dim parserPath As String
@@ -768,6 +799,7 @@ Private Function TryWriteExternalOutputPlan( _
 
     On Error GoTo ParserError
     fallbackReason = ""
+    Set qualifications = New Collection
 
     parserPath = ResolveParserExePath()
     If Len(parserPath) = 0 Then
@@ -792,7 +824,7 @@ Private Function TryWriteExternalOutputPlan( _
     End If
 
     outputText = ReadUnicodeTextFile(outputPath)
-    succeeded = ApplyOutputPlan(wsOutput, wsSql, outputText)
+    succeeded = ApplyOutputPlan(wsOutput, outputText, qualifications)
     If Not succeeded Then
         fallbackReason = ParserOutputInvalidReason()
     End If
@@ -861,15 +893,14 @@ End Function
 ' parserの描画計画を検証してセルと書式へ反映
 Private Function ApplyOutputPlan( _
     ByVal ws As Worksheet, _
-    ByVal wsSql As Worksheet, _
-    ByVal planText As String) As Boolean
+    ByVal planText As String, _
+    ByRef qualifications As Collection) As Boolean
     Dim lines As Variant
     Dim fields As Variant
     Dim cellValues As Variant
     Dim section As Variant
     Dim sections As Collection
-    Dim qualification As Variant
-    Dim qualifications As Collection
+    Dim parsedQualifications As Collection
     Dim lineText As String
     Dim normalizedText As String
     Dim cellValue As String
@@ -902,7 +933,7 @@ Private Function ApplyOutputPlan( _
     If rowCount < 0 Then Exit Function
 
     Set sections = New Collection
-    Set qualifications = New Collection
+    Set parsedQualifications = New Collection
     If rowCount > 0 Then
         ReDim cellValues(1 To rowCount, 1 To OUTPUT_LAST_COLUMN)
     End If
@@ -942,7 +973,7 @@ Private Function ApplyOutputPlan( _
                     originalValue = UnescapeProtocolField(CStr(fields(3)))
                     qualifiedValue = UnescapeProtocolField(CStr(fields(4)))
                     If Len(originalValue) = 0 Or Len(qualifiedValue) = 0 Then GoTo InvalidPlan
-                    qualifications.Add Array( _
+                    parsedQualifications.Add Array( _
                         queryLine, qualificationOrder, originalValue, qualifiedValue)
                 Case Else
                     GoTo InvalidPlan
@@ -961,13 +992,9 @@ Private Function ApplyOutputPlan( _
     For Each section In sections
         ApplyOutputSectionStyle ws, CStr(section(0)), CLng(section(1)), CLng(section(2))
     Next section
-    For Each qualification In qualifications
-        ApplyReplacementQualification _
-            wsSql, CLng(qualification(0)), CStr(qualification(2)), CStr(qualification(3))
-    Next qualification
-
     ApplyOutputSheetFont ws, rowCount
     ApplyOutputSheetView ws
+    Set qualifications = parsedQualifications
     ApplyOutputPlan = True
     Exit Function
 
@@ -975,57 +1002,45 @@ InvalidPlan:
     ApplyOutputPlan = False
 End Function
 
-' parserが補完したプレフィックスを既存の変換内容へ反映
+' parserが補完したプレフィックスを行別の変換内容へ反映
+Private Sub ApplyReplacementQualifications( _
+    ByVal replacementValuesByRow As Object, _
+    ByVal queryLineRows As Collection, _
+    ByVal qualifications As Collection)
+
+    Dim qualification As Variant
+    Dim queryLine As Long
+    Dim rowKey As String
+    Dim replacementValues As Object
+
+    For Each qualification In qualifications
+        queryLine = CLng(qualification(0))
+        If queryLine <= queryLineRows.Count Then
+            rowKey = CStr(queryLineRows.Item(queryLine))
+            If replacementValuesByRow.Exists(rowKey) Then
+                Set replacementValues = replacementValuesByRow(rowKey)
+                ApplyReplacementQualification _
+                    replacementValues, CStr(qualification(2)), CStr(qualification(3))
+            End If
+        End If
+    Next qualification
+End Sub
+
+' 変換内容の初出位置を維持しながら補完前の値を補完後の値へ統合
 Private Sub ApplyReplacementQualification( _
-    ByVal wsSql As Worksheet, _
-    ByVal queryLine As Long, _
+    ByVal replacementValues As Object, _
     ByVal originalValue As String, _
     ByVal qualifiedValue As String)
 
-    Dim rowNumber As Long
-    Dim columnNumber As Long
-    Dim lastColumn As Long
+    Dim firstMatchIndex As Long
 
-    rowNumber = WorksheetRowForQueryLine(wsSql, queryLine)
-    If rowNumber = 0 Then Exit Sub
+    If StrComp(originalValue, qualifiedValue, vbBinaryCompare) = 0 Then Exit Sub
+    If Not replacementValues.Exists(originalValue) Then Exit Sub
 
-    lastColumn = LastUsedColumn(wsSql)
-    If lastColumn < COL_REPLACEMENT Then Exit Sub
-    For columnNumber = COL_REPLACEMENT To lastColumn
-        If StrComp( _
-            CStr(wsSql.Cells(rowNumber, columnNumber).Value), _
-            originalValue, _
-            vbBinaryCompare) = 0 Then
-            SetOutputCellText wsSql.Cells(rowNumber, columnNumber), qualifiedValue
-            Exit Sub
-        End If
-    Next columnNumber
+    firstMatchIndex = CLng(replacementValues(originalValue))
+    replacementValues.Remove originalValue
+    AddReplacementValue replacementValues, qualifiedValue, firstMatchIndex
 End Sub
-
-' parserへ連結した非空SQL行番号をSQL解析シートの行番号へ戻す
-Private Function WorksheetRowForQueryLine( _
-    ByVal wsSql As Worksheet, _
-    ByVal queryLine As Long) As Long
-
-    Dim rowNumber As Long
-    Dim currentQueryLine As Long
-    Dim rowLineCount As Long
-    Dim lastRow As Long
-    Dim sqlText As String
-
-    lastRow = LastUsedRowInColumn(wsSql, COL_SQL)
-    For rowNumber = 2 To lastRow
-        sqlText = CStr(wsSql.Cells(rowNumber, COL_SQL).Value)
-        If Len(sqlText) > 0 Then
-            rowLineCount = TextLineCount(sqlText)
-            If queryLine <= currentQueryLine + rowLineCount Then
-                WorksheetRowForQueryLine = rowNumber
-                Exit Function
-            End If
-            currentQueryLine = currentQueryLine + rowLineCount
-        End If
-    Next rowNumber
-End Function
 
 ' CRLF、CR、LFのいずれでも文字列内の行数を数える
 Private Function TextLineCount(ByVal value As String) As Long

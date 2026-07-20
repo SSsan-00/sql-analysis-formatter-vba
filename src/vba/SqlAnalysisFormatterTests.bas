@@ -25,6 +25,9 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_ResolvesQualifiedStarAndMatchingAlias
     AnalyzeQueries_QualifiesUnqualifiedSelectColumns
     AnalyzeQueries_QualifiesStandaloneColumnThroughTableName
+    AnalyzeQueries_WritesQualifiedReplacementValuesOnce
+    AnalyzeQueries_MapsQualifiedReplacementsToMultilineRows
+    AnalyzeQueries_PreservesReplacementValuesOnParserFallback
     AnalyzeQueries_ResolvesMatchingTemporaryTableDefinition
     AnalyzeQueries_PreservesUnmatchedTemporaryTableDefinition
     AnalyzeQueries_SeparatesTransferExpressionsFromColumns
@@ -678,6 +681,97 @@ Public Sub AnalyzeQueries_QualifiesStandaloneColumnThroughTableName()
     AssertCellValue wsSql.Cells(2, COL_REPLACEMENT), "tb1." & nameText
     AssertCellValue wsOutput.Cells(3, 17), "tb1." & nameText
     AssertCellValue wsOutput.Cells(4, 17), "tb1.age"
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' AST補完後の同じ変換内容を統合し、C列以降へ最終結果だけを書き込むことを確認
+Public Sub AnalyzeQueries_WritesQualifiedReplacementValuesOnce()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim nameText As String
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    nameText = W(&H540D, &H524D)
+    PutDefinition wsRef, 2, "tb1", UserTableText(), "name", nameText
+    PutDefinition wsRef, 3, "-", UserTableText(), "name", nameText
+    wsSql.Cells(2, COL_SQL).Value = "SELECT name, tb1.name FROM users tb1"
+
+    AnalyzeQueries False
+
+    AssertCellValue wsSql.Cells(2, COL_REPLACEMENT), "tb1." & nameText
+    AssertCellValue wsSql.Cells(2, COL_REPLACEMENT + 1), ""
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' parserの論理行番号を複数行セルと後続のSQL解析行へ正しく対応付けることを確認
+Public Sub AnalyzeQueries_MapsQualifiedReplacementsToMultilineRows()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim nameText As String
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    nameText = W(&H540D, &H524D)
+    PutDefinition wsRef, 2, "tb1", UserTableText(), "age", W(&H5E74, &H9F62)
+    PutDefinition wsRef, 3, "tb2", UserTableText(), "code", W(&H30B3, &H30FC, &H30C9)
+    PutDefinition wsRef, 4, "-", UserTableText(), "name", nameText
+    wsSql.Cells(2, COL_SQL).Value = _
+        "SELECT" & vbLf & _
+        "    name" & vbLf & _
+        "FROM users tb1;"
+    wsSql.Cells(3, COL_SQL).Value = "SELECT name FROM archived_users tb2;"
+
+    AnalyzeQueries False
+
+    AssertCellValue wsSql.Cells(2, COL_REPLACEMENT), "tb1." & nameText
+    AssertCellValue wsSql.Cells(3, COL_REPLACEMENT), "tb2." & nameText
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' parserがフォールバックしてもVBA変換で得たC列内容を失わないことを確認
+Public Sub AnalyzeQueries_PreservesReplacementValuesOnParserFallback()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim nameText As String
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    nameText = W(&H540D, &H524D)
+    PutDefinition wsRef, 2, "tb1", UserTableText(), "name", nameText
+    wsSql.Cells(2, COL_SQL).Value = "SELECT tb1.name FROM"
+
+    AnalyzeQueries False
+
+    AssertCellValue wsSql.Cells(2, COL_REPLACEMENT), "tb1." & nameText
+    AssertCellValue wsOutput.Cells(1, 1), "SELECT tb1." & nameText & " FROM"
 End Sub
 
 '@TestMethod("ClearData")
