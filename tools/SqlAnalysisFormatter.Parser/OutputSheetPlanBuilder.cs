@@ -1986,6 +1986,13 @@ public static class OutputSheetPlanBuilder
             connector: string.Empty,
             connectorDepth: 0,
             parts);
+        // CASE直下の先頭条件は、後続するAND/ORと同じ基準列へ戻す。
+        if (parts.Count > 1 &&
+            parts[0].Connector.Length == 0 &&
+            parts[0].ExpressionDepth == 1)
+        {
+            parts[0] = parts[0] with { ExpressionDepth = 0 };
+        }
         return parts;
     }
 

@@ -1166,7 +1166,7 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
-    /// 複合WHEN条件の条件本体を2列下げ、論理演算子と階層表示することを確認
+    /// 複合WHEN条件の先頭を基準列に置き、後続条件を2列下げて階層表示することを確認
     /// </summary>
     [TestMethod]
     public void Build_IndentsCompoundCaseConditionsByTwoColumns()
@@ -1189,8 +1189,8 @@ public sealed class OutputSheetPlanBuilderTests
         Assert.AreEqual(5, plan.RowCount);
         Assert.AreEqual("eligible_flag", CellValue(plan, 3, 17));
         Assert.AreEqual("※", CellValue(plan, 3, 31));
-        Assert.IsNull(CellValue(plan, 3, 32));
-        Assert.AreEqual("(tb1.状態 = 'ACTIVE'", CellValue(plan, 3, 34));
+        Assert.AreEqual("(tb1.状態 = 'ACTIVE'", CellValue(plan, 3, 32));
+        Assert.IsNull(CellValue(plan, 3, 34));
         Assert.AreEqual("AND", CellValue(plan, 4, 32));
         Assert.AreEqual("tb1.削除日時 IS NULL) → 1", CellValue(plan, 4, 34));
         Assert.AreEqual("ELSE → 0", CellValue(plan, 5, 32));
@@ -1214,7 +1214,7 @@ public sealed class OutputSheetPlanBuilderTests
 
         var plan = OutputSheetPlanBuilder.Build(sql, [new("tb1", "ユーザー", "", "")]);
 
-        Assert.AreEqual("tb1.状態 = 'PENDING'", CellValue(plan, 3, 34));
+        Assert.AreEqual("tb1.状態 = 'PENDING'", CellValue(plan, 3, 32));
         Assert.AreEqual("OR", CellValue(plan, 4, 32));
         Assert.AreEqual("tb1.状態 = 'LOCKED' → 1", CellValue(plan, 4, 34));
         Assert.AreEqual("ELSE → 0", CellValue(plan, 5, 32));
@@ -1347,10 +1347,46 @@ public sealed class OutputSheetPlanBuilderTests
         Assert.AreEqual(6, plan.RowCount);
         Assert.AreEqual("CASE結果 = 1", CellValue(plan, 4, 17));
         Assert.AreEqual("※", CellValue(plan, 4, 31));
-        Assert.AreEqual("(tb1.状態 = 'ACTIVE'", CellValue(plan, 4, 34));
+        Assert.AreEqual("(tb1.状態 = 'ACTIVE'", CellValue(plan, 4, 32));
         Assert.AreEqual("AND", CellValue(plan, 5, 32));
         Assert.AreEqual("tb1.削除日時 IS NULL) → 1", CellValue(plan, 5, 34));
         Assert.AreEqual("ELSE → 0", CellValue(plan, 6, 32));
+    }
+
+    /// <summary>
+    /// 複数WHENを持つCASEでも各WHENの先頭条件を同じ基準列へ揃えることを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_AlignsEachCompoundCaseWhenWithBaseColumn()
+    {
+        const string sql = """
+            select
+                tb1.ユーザーID
+            from
+                users as tb1
+            where
+                case
+                    when tb1.状態 = 'ACTIVE' and tb1.削除日時 is null then 1
+                    when tb1.状態 = 'PENDING'
+                        and tb1.作成日時 >= dateadd(day, -7, @base_date) then 1
+                    else 0
+                end = 1
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, [new("tb1", "ユーザー", "", "")]);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(8, plan.RowCount);
+        Assert.AreEqual("CASE結果 = 1", CellValue(plan, 4, 17));
+        Assert.AreEqual("tb1.状態 = 'ACTIVE'", CellValue(plan, 4, 32));
+        Assert.AreEqual("AND", CellValue(plan, 5, 32));
+        Assert.AreEqual("tb1.削除日時 IS NULL → 1", CellValue(plan, 5, 34));
+        Assert.AreEqual("tb1.状態 = 'PENDING'", CellValue(plan, 6, 32));
+        Assert.AreEqual("AND", CellValue(plan, 7, 32));
+        Assert.AreEqual(
+            "tb1.作成日時 >= DATEADD(day, -7, @base_date) → 1",
+            CellValue(plan, 7, 34));
+        Assert.AreEqual("ELSE → 0", CellValue(plan, 8, 32));
     }
 
     /// <summary>
@@ -1669,7 +1705,8 @@ public sealed class OutputSheetPlanBuilderTests
         Assert.AreEqual(7, plan.RowCount);
         Assert.AreEqual("CASE結果 = tb2.対象ユーザーID", CellValue(plan, 5, 17));
         Assert.AreEqual("※", CellValue(plan, 5, 31));
-        Assert.AreEqual("tb1.状態 = 'ACTIVE'", CellValue(plan, 5, 34));
+        Assert.AreEqual("tb1.状態 = 'ACTIVE'", CellValue(plan, 5, 32));
+        Assert.IsNull(CellValue(plan, 5, 34));
         Assert.AreEqual("AND", CellValue(plan, 6, 32));
         Assert.AreEqual("tb2.有効区分 = 1 → tb1.ユーザーID", CellValue(plan, 6, 34));
         Assert.AreEqual("ELSE → 0", CellValue(plan, 7, 32));
@@ -2946,7 +2983,8 @@ public sealed class OutputSheetPlanBuilderTests
         Assert.IsNull(CellValue(plan, 4, 19));
         Assert.AreEqual("CASE結果", CellValue(plan, 4, 37));
         Assert.AreEqual("※", CellValue(plan, 4, 51));
-        Assert.AreEqual("tb1.削除日時 IS NULL", CellValue(plan, 4, 54));
+        Assert.AreEqual("tb1.削除日時 IS NULL", CellValue(plan, 4, 52));
+        Assert.IsNull(CellValue(plan, 4, 54));
         Assert.AreEqual("AND", CellValue(plan, 5, 52));
         Assert.AreEqual("tb1.有効区分 = 1 → 'ACTIVE'", CellValue(plan, 5, 54));
         Assert.AreEqual("ELSE → 'INACTIVE'", CellValue(plan, 6, 52));
