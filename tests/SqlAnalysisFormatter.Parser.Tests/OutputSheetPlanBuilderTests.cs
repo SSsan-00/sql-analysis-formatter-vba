@@ -140,6 +140,74 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
+    /// A列がハイフンの列をB列の和名が一致する一意なSQL別名へ結び付けることを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_QualifiesStandaloneMappedColumnThroughUniqueTableName()
+    {
+        const string sql = """
+            SELECT __SAF_FIELD_R000003__, age
+            FROM users AS tb1
+            LEFT JOIN location AS tb2 ON tb1.id = tb2.id
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "ユーザー", "age", "年齢", "__SAF_FIELD_R000002__"),
+            new("-", "ユーザー", "name", "名前", "__SAF_FIELD_R000003__"),
+            new("tb2", "所在地", "address", "住所", "__SAF_FIELD_R000004__")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("tb1.名前", CellValue(plan, 3, 17));
+        Assert.AreEqual("tb1.age", CellValue(plan, 4, 17));
+    }
+
+    /// <summary>
+    /// A列がハイフンでもD列が空欄なら物理列名を保ったまま一意なSQL別名を補うことを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_PreservesPhysicalStandaloneColumnWhenDisplayNameIsEmpty()
+    {
+        const string sql = "SELECT name FROM users AS tb1";
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "ユーザー", "age", "年齢"),
+            new("-", "ユーザー", "name", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("tb1.name", CellValue(plan, 3, 17));
+    }
+
+    /// <summary>
+    /// B列の和名が同じSQL別名が複数ある場合はA列がハイフンの列を推測で修飾しないことを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_DoesNotQualifyStandaloneColumnWhenTableNameIsAmbiguous()
+    {
+        const string sql = """
+            SELECT __SAF_FIELD_R000004__
+            FROM users AS tb1
+            LEFT JOIN backup_users AS tb3 ON tb1.id = tb3.id
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "ユーザー", "age", "年齢", "__SAF_FIELD_R000002__"),
+            new("tb3", "ユーザー", "status", "状態", "__SAF_FIELD_R000003__"),
+            new("-", "ユーザー", "name", "名前", "__SAF_FIELD_R000004__")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("名前", CellValue(plan, 3, 17));
+    }
+
+    /// <summary>
     /// 式内の未修飾列も一意な変換定義で修飾し、INSERT SELECTの移送元へ反映することを確認
     /// </summary>
     [TestMethod]

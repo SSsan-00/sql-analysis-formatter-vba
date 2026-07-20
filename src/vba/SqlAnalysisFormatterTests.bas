@@ -24,6 +24,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_NormalizesInvisibleOutputWhitespace
     AnalyzeQueries_ResolvesQualifiedStarAndMatchingAlias
     AnalyzeQueries_QualifiesUnqualifiedSelectColumns
+    AnalyzeQueries_QualifiesStandaloneColumnThroughTableName
     AnalyzeQueries_ResolvesMatchingTemporaryTableDefinition
     AnalyzeQueries_PreservesUnmatchedTemporaryTableDefinition
     AnalyzeQueries_SeparatesTransferExpressionsFromColumns
@@ -643,6 +644,39 @@ Public Sub AnalyzeQueries_QualifiesUnqualifiedSelectColumns()
 
     AssertCellValue wsOutput.Cells(3, 17), "tb1.name"
     AssertCellValue wsOutput.Cells(4, 17), "tb2.address"
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' A列がハイフンの未修飾列をB列が一致する一意なSQL別名へ結び付けることを確認
+Public Sub AnalyzeQueries_QualifiesStandaloneColumnThroughTableName()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim nameText As String
+    Dim ageText As String
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    nameText = W(&H540D, &H524D)
+    ageText = W(&H5E74, &H9F62)
+    PutDefinition wsRef, 2, "tb1", UserTableText(), "age", ageText
+    PutDefinition wsRef, 3, "-", UserTableText(), "name", nameText
+    PutDefinition wsRef, 4, "tb2", "Location", "address", "Address"
+    wsSql.Cells(2, COL_SQL).Value = _
+        "SELECT name, age FROM users tb1 LEFT JOIN location tb2 ON tb1.id = tb2.id"
+
+    AnalyzeQueries False
+
+    AssertCellValue wsOutput.Cells(3, 17), "tb1." & nameText
+    AssertCellValue wsOutput.Cells(4, 17), "tb1.age"
 End Sub
 
 '@TestMethod("ClearData")

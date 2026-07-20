@@ -123,8 +123,11 @@ public static class OutputSheetPlanBuilder
         var fieldId = identifiers[0].Value;
         var candidates = namedTables
             .Where(table => mappings.Any(mapping =>
-                MappingFieldMatches(mapping, fieldId) &&
-                MappingBelongsToTable(mapping, table)))
+                MappingAssociatesColumnWithTable(
+                    mapping,
+                    fieldId,
+                    table,
+                    mappings)))
             .DistinctBy(
                 table => table.Alias?.Value ?? table.SchemaObject.BaseIdentifier.Value,
                 StringComparer.OrdinalIgnoreCase)
@@ -137,6 +140,51 @@ public static class OutputSheetPlanBuilder
 
         var identifier = candidates[0].Alias ?? candidates[0].SchemaObject.BaseIdentifier;
         return FragmentText(sql, identifier);
+    }
+
+    /// <summary>
+    /// 列定義がA列で直接、またはハイフン行のB列を介してFROMテーブルへ所属するか判定
+    /// </summary>
+    private static bool MappingAssociatesColumnWithTable(
+        MappingDefinition mapping,
+        string fieldId,
+        NamedTableReference table,
+        IReadOnlyList<MappingDefinition> mappings)
+    {
+        if (!MappingFieldMatches(mapping, fieldId))
+        {
+            return false;
+        }
+
+        if (MappingBelongsToTable(mapping, table))
+        {
+            return true;
+        }
+
+        if (mapping.TableId != "-" || !IsUsableTableName(mapping.TableName))
+        {
+            return false;
+        }
+
+        return mappings.Any(anchor =>
+            anchor.TableId != "-" &&
+            IsUsableTableName(anchor.TableName) &&
+            string.Equals(
+                anchor.TableName.Trim(),
+                mapping.TableName.Trim(),
+                StringComparison.OrdinalIgnoreCase) &&
+            MappingBelongsToTable(anchor, table));
+    }
+
+    /// <summary>
+    /// B列の値をテーブル所属の照合に使用できるか判定
+    /// </summary>
+    private static bool IsUsableTableName(string tableName)
+    {
+        var value = tableName.Trim();
+        return value.Length > 0 &&
+            value != "-" &&
+            !value.Contains(MissingName, StringComparison.Ordinal);
     }
 
     /// <summary>

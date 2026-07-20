@@ -71,6 +71,7 @@ try {
         'AnalyzeQueries_NormalizesInvisibleOutputWhitespace',
         'AnalyzeQueries_ResolvesQualifiedStarAndMatchingAlias',
         'AnalyzeQueries_QualifiesUnqualifiedSelectColumns',
+        'AnalyzeQueries_QualifiesStandaloneColumnThroughTableName',
         'AnalyzeQueries_ResolvesMatchingTemporaryTableDefinition',
         'AnalyzeQueries_PreservesUnmatchedTemporaryTableDefinition',
         'AnalyzeQueries_SeparatesTransferExpressionsFromColumns',
