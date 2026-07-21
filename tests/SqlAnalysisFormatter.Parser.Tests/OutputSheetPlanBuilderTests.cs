@@ -632,6 +632,27 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
+    /// 角括弧付きユーザー定義関数の識別子を取得項目へ原文どおり表示することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_PreservesBracketedUserDefinedFunctionNameForDisplay()
+    {
+        const string sql = """
+            SELECT
+                dbo.[CURRENT_TIMESTAMP]()
+                , dbo.[current_timestamp]() AS generated_at
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("dbo.[CURRENT_TIMESTAMP]()", CellValue(plan, 3, 17));
+        Assert.AreEqual("generated_at", CellValue(plan, 4, 17));
+        Assert.AreEqual("※", CellValue(plan, 4, 31));
+        Assert.AreEqual("dbo.[current_timestamp]()", CellValue(plan, 4, 32));
+    }
+
+    /// <summary>
     /// VALUESテーブル値コンストラクターを派生テーブルとして表示することを確認
     /// </summary>
     [TestMethod]

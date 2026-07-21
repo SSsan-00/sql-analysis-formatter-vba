@@ -132,7 +132,10 @@ internal static class SqlDisplayFormatter
         /// </summary>
         public override void ExplicitVisit(FunctionCall node)
         {
-            replacements[node.FunctionName.StartOffset] = node.FunctionName.Value.ToUpperInvariant();
+            if (node.FunctionName.QuoteType == QuoteType.NotQuoted)
+            {
+                replacements[node.FunctionName.StartOffset] = node.FunctionName.Value.ToUpperInvariant();
+            }
             base.ExplicitVisit(node);
         }
 
