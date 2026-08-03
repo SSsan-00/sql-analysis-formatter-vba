@@ -14,6 +14,7 @@ Private Const COL_RESULT As Long = 2
 Private Const COL_REPLACEMENT As Long = 3
 
 Private Const OUTPUT_LAST_COLUMN As Long = 90
+Private Const OUTPUT_TWO_LAST_COLUMN As Long = 100
 Private Const OUTPUT_COLUMN_WIDTH As Double = 1.14
 Private Const OUTPUT_ROW_HEIGHT As Double = 13.5
 Private Const OUTPUT_FILL_COLOR As Long = &HEFCEF2
@@ -24,16 +25,29 @@ Public Sub SetupWorkbook()
     Dim wsRef As Worksheet
     Dim wsSql As Worksheet
     Dim wsOutput As Worksheet
+    Dim wsOutputTwo As Worksheet
+    Dim wsTableList As Worksheet
 
     Set wsRef = ResolveOrCreateSheet(ReferenceSheetName(), REF_LEGACY_SHEET, 1)
     Set wsSql = ResolveOrCreateSheet(SqlSheetName(), SQL_LEGACY_SHEET, 2)
-    Set wsOutput = ResolveOrCreateSheet(OutputSheetName(), OutputSheetName(), 3)
+    Set wsOutput = ResolveOrCreateOutputSheet()
+    Set wsOutputTwo = ResolveOrCreateNamedSheet(OutputSheetTwoName())
+    Set wsTableList = ResolveOrCreateNamedSheet(TableListSheetName())
+
+    MoveWorksheetToIndex wsRef, 1
+    MoveWorksheetToIndex wsSql, 2
+    MoveWorksheetToIndex wsOutput, 3
+    MoveWorksheetToIndex wsOutputTwo, 4
+    MoveWorksheetToIndex wsTableList, 5
 
     RestoreHeaders wsRef, wsSql
     ApplyMissingNameConditionalFormatting wsRef
     ApplyOutputSheetLayout wsOutput
+    EnsureOutputTwoStructure wsOutputTwo
+    ApplyTableListLayout wsTableList
     InstallButtons wsSql
-    InstallOutputButton wsOutput
+    InstallOutputButton wsOutput, "btnCopyOutput", "CopyOutput", OUTPUT_LAST_COLUMN
+    InstallOutputButton wsOutputTwo, "btnCopyOutputTwo", "CopyOutputTwo", OUTPUT_TWO_LAST_COLUMN
 End Sub
 
 ' SQL解析シートのA列を変換し、B列以降へ結果を出力
@@ -41,6 +55,8 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     Dim wsRef As Worksheet
     Dim wsSql As Worksheet
     Dim wsOutput As Worksheet
+    Dim wsOutputTwo As Worksheet
+    Dim wsTableList As Worksheet
     Dim qualifiedMap As Object
     Dim standaloneMap As Object
     Dim qualifiedParserMap As Object
@@ -59,10 +75,16 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     Dim replacementValuesByRow As Object
     Dim queryLineRows As Collection
     Dim qualifications As Collection
+    Dim inputTableIds As Collection
+    Dim outputTableIds As Collection
+    Dim tableMaster As Object
+    Dim duplicateTableIds As Collection
 
     Set wsRef = GetReferenceSheet()
     Set wsSql = GetSqlSheet()
     Set wsOutput = GetOutputSheet(False)
+    Set wsOutputTwo = GetOutputTwoSheet(False)
+    Set wsTableList = GetTableListSheet()
     Set qualifiedMap = CreateTextDictionary()
     Set standaloneMap = CreateTextDictionary()
     Set qualifiedParserMap = CreateTextDictionary()
@@ -70,6 +92,9 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     Set replacementValuesByRow = CreateTextDictionary()
     Set queryLineRows = New Collection
     Set qualifications = New Collection
+    Set inputTableIds = New Collection
+    Set outputTableIds = New Collection
+    LoadTableMaster wsTableList, tableMaster, duplicateTableIds
 
     LoadMappings wsRef, qualifiedMap, standaloneMap, qualifiedParserMap, standaloneParserMap
     qualifiedKeys = SortedKeysByLengthDesc(qualifiedMap)
@@ -78,6 +103,7 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     lastRow = LastUsedRowInColumn(wsSql, COL_SQL)
     ClearAnalyzeOutput wsSql, lastRow
     ClearOutputSheet wsOutput, False
+    ClearOutputTwoSheet wsOutputTwo
 
     For rowNumber = 2 To lastRow
         sourceText = CStr(wsSql.Cells(rowNumber, COL_SQL).Value)
@@ -103,11 +129,12 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
 
     If Len(convertedQueryText) > 0 Then
         If Not TryWriteExternalOutputPlan( _
-            wsOutput, wsRef, parserQueryText, qualifications, fallbackReason) Then
+            wsOutput, wsRef, parserQueryText, qualifications, inputTableIds, outputTableIds, fallbackReason) Then
             WriteFallbackOutput wsOutput, convertedQueryText, fallbackReason
         Else
             ApplyReplacementQualifications _
                 replacementValuesByRow, queryLineRows, qualifications
+            RenderOutputTwo wsOutputTwo, inputTableIds, outputTableIds, tableMaster
         End If
     Else
         ApplyOutputSheetLayout wsOutput
@@ -122,6 +149,9 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
 
     wsSql.Range(wsSql.Cells(1, COL_RESULT), wsSql.Cells(MaxLong(lastRow, 1), COL_RESULT)).WrapText = False
     SetReplacementColumnsWrapText wsSql, False, LastUsedColumn(wsSql), MaxLong(lastRow, 1)
+    If showMessage And duplicateTableIds.Count > 0 Then
+        MsgBox DuplicateTableWarningMessage(duplicateTableIds), vbExclamation
+    End If
     If showMessage Then
         MsgBox AnalyzeDoneMessage(), vbInformation
     End If
@@ -133,6 +163,8 @@ Public Sub ClearData(Optional ByVal showMessage As Boolean = True)
     Dim wsRef As Worksheet
     Dim wsSql As Worksheet
     Dim wsOutput As Worksheet
+    Dim wsOutputTwo As Worksheet
+    Dim wsTableList As Worksheet
 
     If showMessage Then
         If MsgBox(ClearConfirmMessage(), vbQuestion + vbYesNo + vbDefaultButton2, ConfirmTitle()) <> vbYes Then
@@ -143,14 +175,19 @@ Public Sub ClearData(Optional ByVal showMessage As Boolean = True)
     Set wsRef = GetReferenceSheet()
     Set wsSql = GetSqlSheet()
     Set wsOutput = GetOutputSheet(False)
+    Set wsOutputTwo = GetOutputTwoSheet(False)
+    Set wsTableList = GetTableListSheet()
 
     ClearRowsBelowHeader wsRef, COL_FIELD_NAME
     ClearRowsBelowHeader wsSql, COL_REPLACEMENT
     ClearOutputSheet wsOutput
+    ClearOutputTwoSheet wsOutputTwo
     RestoreHeaders wsRef, wsSql
     ResetSheetViewPosition wsRef
     ResetSheetViewPosition wsSql
     ResetSheetViewPosition wsOutput
+    ResetSheetViewPosition wsOutputTwo
+    ResetSheetViewPosition wsTableList
     If showMessage Then
         MsgBox ClearDoneMessage(), vbInformation
     End If
@@ -493,9 +530,27 @@ End Function
 Private Function GetOutputSheet(Optional ByVal applyLayout As Boolean = True) As Worksheet
     Dim ws As Worksheet
 
-    Set ws = ResolveOrCreateSheet(OutputSheetName(), OutputSheetName(), 3)
+    Set ws = ResolveOrCreateOutputSheet()
     If applyLayout Then ApplyOutputSheetLayout ws
     Set GetOutputSheet = ws
+End Function
+
+' アウトプット②を取得
+Private Function GetOutputTwoSheet(Optional ByVal applyLayout As Boolean = True) As Worksheet
+    Dim ws As Worksheet
+
+    Set ws = ResolveOrCreateNamedSheet(OutputSheetTwoName())
+    If applyLayout Then ApplyOutputTwoSheetLayout ws
+    Set GetOutputTwoSheet = ws
+End Function
+
+' テーブル一覧を取得
+Private Function GetTableListSheet() As Worksheet
+    Dim ws As Worksheet
+
+    Set ws = ResolveOrCreateNamedSheet(TableListSheetName())
+    ApplyTableListLayout ws
+    Set GetTableListSheet = ws
 End Function
 
 ' アウトプットシートの表示と書式を適用
@@ -510,26 +565,35 @@ End Sub
 
 ' アウトプットシートの成果物をA列からCL列までコピー
 Public Sub CopyOutput(Optional ByVal showMessage As Boolean = True)
-    Dim wsOutput As Worksheet
+    CopyOutputRange GetOutputSheet(), OUTPUT_LAST_COLUMN, showMessage, "CopyOutput"
+End Sub
+
+' アウトプット②の使用範囲をクリップボードへコピー
+Public Sub CopyOutputTwo(Optional ByVal showMessage As Boolean = True)
+    CopyOutputRange GetOutputTwoSheet(), OUTPUT_TWO_LAST_COLUMN, showMessage, "CopyOutputTwo"
+End Sub
+
+' 指定したアウトプットシートの使用範囲をクリップボードへコピー
+Private Sub CopyOutputRange( _
+    ByVal wsOutput As Worksheet, _
+    ByVal lastColumn As Long, _
+    ByVal showMessage As Boolean, _
+    ByVal errorSource As String)
+
     Dim lastRow As Long
     Dim errorNumber As Long
     Dim errorDescription As String
 
     On Error GoTo CopyFail
 
-    Set wsOutput = GetOutputSheet()
-    lastRow = LastOutputRow(wsOutput)
-    If Application.CountA(wsOutput.Range(wsOutput.Cells(1, 1), wsOutput.Cells(lastRow, OUTPUT_LAST_COLUMN))) = 0 Then
-        If showMessage Then
-            MsgBox NoOutputToCopyMessage(), vbInformation
-        End If
+    lastRow = LastOutputRow(wsOutput, lastColumn)
+    If Application.CountA(wsOutput.Range(wsOutput.Cells(1, 1), wsOutput.Cells(lastRow, lastColumn))) = 0 Then
+        If showMessage Then MsgBox NoOutputToCopyMessage(), vbInformation
         Exit Sub
     End If
 
-    wsOutput.Range(wsOutput.Cells(1, 1), wsOutput.Cells(lastRow, OUTPUT_LAST_COLUMN)).Copy
-    If showMessage Then
-        MsgBox CopyDoneMessage(), vbInformation
-    End If
+    wsOutput.Range(wsOutput.Cells(1, 1), wsOutput.Cells(lastRow, lastColumn)).Copy
+    If showMessage Then MsgBox CopyDoneMessage(), vbInformation
     Exit Sub
 
 CopyFail:
@@ -538,30 +602,39 @@ CopyFail:
     If showMessage Then
         MsgBox CopyFailedMessage() & errorDescription, vbExclamation
     Else
-        Err.Raise errorNumber, "CopyOutput", errorDescription
+        Err.Raise errorNumber, errorSource, errorDescription
     End If
 End Sub
 
 ' アウトプット範囲へ既定フォントを設定
-Private Sub ApplyOutputSheetFont(ByVal ws As Worksheet, Optional ByVal lastRow As Long = 0)
+Private Sub ApplyOutputSheetFont( _
+    ByVal ws As Worksheet, _
+    Optional ByVal lastRow As Long = 0, _
+    Optional ByVal lastColumn As Long = OUTPUT_LAST_COLUMN)
+
     lastRow = MaxLong(lastRow, 1)
-    With ws.Range(ws.Cells(1, 1), ws.Cells(lastRow, OUTPUT_LAST_COLUMN)).Font
+    With ws.Range(ws.Cells(1, 1), ws.Cells(lastRow, lastColumn)).Font
         .Name = OutputFontName()
         .Size = OutputFontSize()
     End With
 End Sub
 
 ' アウトプットシートの列幅、行高、文字配置を設定
-Private Sub ApplyOutputSheetDimensions(ByVal ws As Worksheet, ByVal lastRow As Long)
+Private Sub ApplyOutputSheetDimensions( _
+    ByVal ws As Worksheet, _
+    ByVal lastRow As Long, _
+    Optional ByVal lastColumn As Long = OUTPUT_LAST_COLUMN)
     Dim layoutLastRow As Long
     Dim outputColumns As Range
 
     layoutLastRow = MaxLong(lastRow, 1)
-    Set outputColumns = ws.Range(ws.Columns(1), ws.Columns(OUTPUT_LAST_COLUMN))
+    Set outputColumns = ws.Range(ws.Columns(1), ws.Columns(lastColumn))
     With outputColumns
         .ColumnWidth = OUTPUT_COLUMN_WIDTH
         .WrapText = False
         .ShrinkToFit = False
+        .Font.Name = OutputFontName()
+        .Font.Size = OutputFontSize()
     End With
     ws.Range(ws.Rows(1), ws.Rows(layoutLastRow)).RowHeight = OUTPUT_ROW_HEIGHT
 End Sub
@@ -620,6 +693,44 @@ Private Function ResolveOrCreateSheet(ByVal primaryName As String, ByVal fallbac
     Set ResolveOrCreateSheet = ws
 End Function
 
+' 名前が一致するシートを取得し、存在しない場合は末尾へ安全に追加
+Private Function ResolveOrCreateNamedSheet(ByVal sheetName As String) As Worksheet
+    Dim ws As Worksheet
+
+    Set ws = TryGetWorksheet(sheetName)
+    If ws Is Nothing Then
+        Set ws = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+        ws.Name = sheetName
+    End If
+
+    Set ResolveOrCreateNamedSheet = ws
+End Function
+
+' アウトプット①だけは任意の既存シートを流用せず、旧名移行または新規作成する
+Private Function ResolveOrCreateOutputSheet() As Worksheet
+    Dim ws As Worksheet
+
+    Set ws = TryGetWorksheet(OutputSheetName())
+    If ws Is Nothing Then Set ws = TryGetWorksheet(LegacyOutputSheetName())
+    If ws Is Nothing Then
+        Set ws = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+    End If
+    If ws.Name <> OutputSheetName() Then ws.Name = OutputSheetName()
+
+    Set ResolveOrCreateOutputSheet = ws
+End Function
+
+' シートを指定位置へ移動
+Private Sub MoveWorksheetToIndex(ByVal ws As Worksheet, ByVal desiredIndex As Long)
+    If ws.Index = desiredIndex Then Exit Sub
+
+    If desiredIndex <= 1 Then
+        ws.Move Before:=ThisWorkbook.Worksheets(1)
+    Else
+        ws.Move After:=ThisWorkbook.Worksheets(desiredIndex - 1)
+    End If
+End Sub
+
 ' 指定名のシートを存在する場合だけ取得
 Private Function TryGetWorksheet(ByVal sheetName As String) As Worksheet
     On Error Resume Next
@@ -642,6 +753,16 @@ Private Sub ApplyReferenceHeader(ByVal ws As Worksheet)
     ws.Cells(1, COL_FIELD_NAME).Value = FieldNameHeader()
     ws.Rows(1).Font.Bold = True
     ws.Columns("A:D").AutoFit
+End Sub
+
+' アウトプット②の表示と基本書式を適用
+Private Sub ApplyOutputTwoSheetLayout(ByVal ws As Worksheet)
+    Dim lastRow As Long
+
+    lastRow = LastOutputRow(ws, OUTPUT_TWO_LAST_COLUMN)
+    ApplyOutputSheetFont ws, lastRow, OUTPUT_TWO_LAST_COLUMN
+    ApplyOutputSheetDimensions ws, lastRow, OUTPUT_TWO_LAST_COLUMN
+    ApplyOutputSheetView ws
 End Sub
 
 ' 変換定義A～D列の和名未取得表示を値変更へ追従させる
@@ -788,20 +909,24 @@ Private Sub AddQueryLineRows( _
 End Sub
 
 ' アウトプットシートへコピーボタンを配置
-Private Sub InstallOutputButton(ByVal ws As Worksheet)
+Private Sub InstallOutputButton( _
+    ByVal ws As Worksheet, _
+    ByVal buttonName As String, _
+    ByVal macroName As String, _
+    ByVal lastColumn As Long)
     Dim copyButton As Object
     Dim buttonLeft As Double
     Dim buttonTop As Double
 
-    DeleteShapeIfExists ws, "btnCopyOutput"
-    buttonLeft = ws.Columns(OUTPUT_LAST_COLUMN + 1).Left + 4
+    DeleteShapeIfExists ws, buttonName
+    buttonLeft = ws.Columns(lastColumn + 1).Left + 4
     buttonTop = ws.Rows(1).Top + 2
 
     Set copyButton = ws.Buttons.Add(buttonLeft, buttonTop, 72, 24)
     With copyButton
-        .Name = "btnCopyOutput"
+        .Name = buttonName
         .Caption = CopyButtonText()
-        .OnAction = "CopyOutput"
+        .OnAction = macroName
     End With
 End Sub
 
@@ -811,6 +936,8 @@ Private Function TryWriteExternalOutputPlan( _
     ByVal wsRef As Worksheet, _
     ByVal queryText As String, _
     ByRef qualifications As Collection, _
+    ByRef inputTableIds As Collection, _
+    ByRef outputTableIds As Collection, _
     ByRef fallbackReason As String) As Boolean
 
     Dim parserPath As String
@@ -824,6 +951,8 @@ Private Function TryWriteExternalOutputPlan( _
     On Error GoTo ParserError
     fallbackReason = ""
     Set qualifications = New Collection
+    Set inputTableIds = New Collection
+    Set outputTableIds = New Collection
 
     parserPath = ResolveParserExePath()
     If Len(parserPath) = 0 Then
@@ -848,7 +977,8 @@ Private Function TryWriteExternalOutputPlan( _
     End If
 
     outputText = ReadUnicodeTextFile(outputPath)
-    succeeded = ApplyOutputPlan(wsOutput, outputText, qualifications)
+    succeeded = ApplyOutputPlan( _
+        wsOutput, outputText, qualifications, inputTableIds, outputTableIds)
     If Not succeeded Then
         fallbackReason = ParserOutputInvalidReason()
     End If
@@ -918,18 +1048,23 @@ End Function
 Private Function ApplyOutputPlan( _
     ByVal ws As Worksheet, _
     ByVal planText As String, _
-    ByRef qualifications As Collection) As Boolean
+    ByRef qualifications As Collection, _
+    ByRef inputTableIds As Collection, _
+    ByRef outputTableIds As Collection) As Boolean
     Dim lines As Variant
     Dim fields As Variant
     Dim cellValues As Variant
     Dim section As Variant
     Dim sections As Collection
     Dim parsedQualifications As Collection
+    Dim parsedInputTableIds As Collection
+    Dim parsedOutputTableIds As Collection
     Dim lineText As String
     Dim normalizedText As String
     Dim cellValue As String
     Dim originalValue As String
     Dim qualifiedValue As String
+    Dim tableId As String
     Dim lineIndex As Long
     Dim planVersion As Long
     Dim rowCount As Long
@@ -951,13 +1086,15 @@ Private Function ApplyOutputPlan( _
     If CStr(fields(0)) <> "SAF_OUTPUT_PLAN" Then Exit Function
     If Not IsNumeric(fields(1)) Then Exit Function
     planVersion = CLng(fields(1))
-    If planVersion < 1 Or planVersion > 2 Then Exit Function
+    If planVersion < 1 Or planVersion > 3 Then Exit Function
     If Not IsNumeric(fields(2)) Then Exit Function
     rowCount = CLng(fields(2))
     If rowCount < 0 Then Exit Function
 
     Set sections = New Collection
     Set parsedQualifications = New Collection
+    Set parsedInputTableIds = New Collection
+    Set parsedOutputTableIds = New Collection
     If rowCount > 0 Then
         ReDim cellValues(1 To rowCount, 1 To OUTPUT_LAST_COLUMN)
     End If
@@ -999,6 +1136,18 @@ Private Function ApplyOutputPlan( _
                     If Len(originalValue) = 0 Or Len(qualifiedValue) = 0 Then GoTo InvalidPlan
                     parsedQualifications.Add Array( _
                         queryLine, qualificationOrder, originalValue, qualifiedValue)
+                Case "T"
+                    If planVersion < 3 Or UBound(fields) <> 2 Then GoTo InvalidPlan
+                    tableId = UnescapeProtocolField(CStr(fields(2)))
+                    If Len(tableId) = 0 Then GoTo InvalidPlan
+                    Select Case UCase$(CStr(fields(1)))
+                        Case "INPUT"
+                            parsedInputTableIds.Add tableId
+                        Case "OUTPUT"
+                            parsedOutputTableIds.Add tableId
+                        Case Else
+                            GoTo InvalidPlan
+                    End Select
                 Case Else
                     GoTo InvalidPlan
             End Select
@@ -1019,11 +1168,260 @@ Private Function ApplyOutputPlan( _
     ApplyOutputSheetFont ws, rowCount
     ApplyOutputSheetView ws
     Set qualifications = parsedQualifications
+    Set inputTableIds = parsedInputTableIds
+    Set outputTableIds = parsedOutputTableIds
     ApplyOutputPlan = True
     Exit Function
 
 InvalidPlan:
     ApplyOutputPlan = False
+End Function
+
+' アウトプット②のタイトルと見出しがなければ初期化
+Private Sub EnsureOutputTwoStructure(ByVal ws As Worksheet)
+    If CStr(ws.Cells(1, 1).Value) <> InputInformationTitle() Or _
+        CStr(ws.Cells(1, 53).Value) <> OutputInformationTitle() Then
+        ClearOutputTwoSheet ws
+    Else
+        ApplyOutputTwoSheetLayout ws
+    End If
+End Sub
+
+' アウトプット②をタイトルと見出しだけの状態へ戻す
+Private Sub ClearOutputTwoSheet(ByVal ws As Worksheet)
+    ResetOutputTwoSurface ws
+    ApplyOutputTwoBlockStyle ws, 1, 3
+    ApplyOutputTwoBlockStyle ws, 53, 3
+    ApplyOutputTwoSheetLayout ws
+End Sub
+
+' 入出力テーブルをテーブル一覧と照合してアウトプット②へ描画
+Private Sub RenderOutputTwo( _
+    ByVal ws As Worksheet, _
+    ByVal inputTableIds As Collection, _
+    ByVal outputTableIds As Collection, _
+    ByVal tableMaster As Object)
+
+    Dim inputLastRow As Long
+    Dim outputLastRow As Long
+
+    ResetOutputTwoSurface ws
+    inputLastRow = WriteOutputTwoBlock(ws, 1, inputTableIds, tableMaster)
+    outputLastRow = WriteOutputTwoBlock(ws, 53, outputTableIds, tableMaster)
+    ApplyOutputTwoBlockStyle ws, 1, inputLastRow
+    ApplyOutputTwoBlockStyle ws, 53, outputLastRow
+    ApplyOutputTwoSheetLayout ws
+End Sub
+
+' アウトプット②の旧内容・結合・書式を消して固定見出しを配置
+Private Sub ResetOutputTwoSurface(ByVal ws As Worksheet)
+    Dim clearLastRow As Long
+
+    clearLastRow = MaxLong(LastOutputRow(ws, OUTPUT_TWO_LAST_COLUMN), 3)
+    With ws.Range(ws.Cells(1, 1), ws.Cells(clearLastRow, OUTPUT_TWO_LAST_COLUMN))
+        .UnMerge
+        .ClearContents
+        .ClearFormats
+        .WrapText = False
+        .ShrinkToFit = False
+    End With
+
+    InitializeOutputTwoBlock ws, 1, InputInformationTitle()
+    InitializeOutputTwoBlock ws, 53, OutputInformationTitle()
+    With ws.Range(ws.Cells(1, 49), ws.Cells(clearLastRow, 52))
+        .ClearContents
+        .ClearFormats
+    End With
+End Sub
+
+' アウトプット②の片側ブロックへタイトルと見出しを設定
+Private Sub InitializeOutputTwoBlock( _
+    ByVal ws As Worksheet, _
+    ByVal startColumn As Long, _
+    ByVal titleText As String)
+
+    SetOutputCellText ws.Cells(1, startColumn), titleText
+    ws.Range(ws.Cells(3, startColumn), ws.Cells(3, startColumn + 1)).Merge
+    SetOutputCellText ws.Cells(3, startColumn), "No"
+    SetOutputCellText ws.Cells(3, startColumn + 2), TableListIdHeader()
+    SetOutputCellText ws.Cells(3, startColumn + 18), TableListNameHeader()
+    SetOutputCellText ws.Cells(3, startColumn + 43), TableNumberHeader()
+End Sub
+
+' 物理テーブルIDをマスターと照合し、片側ブロックへ出力
+Private Function WriteOutputTwoBlock( _
+    ByVal ws As Worksheet, _
+    ByVal startColumn As Long, _
+    ByVal tableIds As Collection, _
+    ByVal tableMaster As Object) As Long
+
+    Dim tableId As Variant
+    Dim tableRow As Variant
+    Dim rowNumber As Long
+    Dim itemNumber As Long
+    Dim emitted As Object
+
+    Set emitted = CreateCaseInsensitiveTextDictionary()
+    rowNumber = 3
+    For Each tableId In tableIds
+        tableId = NormalizePhysicalTableId(CStr(tableId))
+        If tableMaster.Exists(CStr(tableId)) Then
+            tableRow = tableMaster(CStr(tableId))
+            If Not emitted.Exists(CStr(tableId)) Then
+                emitted.Add CStr(tableId), True
+                itemNumber = itemNumber + 1
+                rowNumber = rowNumber + 1
+                ws.Range( _
+                    ws.Cells(rowNumber, startColumn), _
+                    ws.Cells(rowNumber, startColumn + 1)).Merge
+                SetOutputCellText ws.Cells(rowNumber, startColumn), CStr(itemNumber)
+                SetOutputCellText ws.Cells(rowNumber, startColumn + 2), CStr(tableId)
+                SetOutputCellText ws.Cells(rowNumber, startColumn + 18), CStr(tableRow(1))
+                SetOutputCellText ws.Cells(rowNumber, startColumn + 43), CStr(tableRow(2))
+            End If
+        End If
+    Next tableId
+
+    WriteOutputTwoBlock = rowNumber
+End Function
+
+' アウトプット②の論理4項目へ外枠と行境界を設定
+Private Sub ApplyOutputTwoBlockStyle( _
+    ByVal ws As Worksheet, _
+    ByVal startColumn As Long, _
+    ByVal lastRow As Long)
+
+    Dim noRange As Range
+    Dim idRange As Range
+    Dim nameRange As Range
+    Dim numberRange As Range
+    Dim logicalRange As Variant
+
+    lastRow = MaxLong(lastRow, 3)
+    Set noRange = ws.Range(ws.Cells(3, startColumn), ws.Cells(lastRow, startColumn + 1))
+    Set idRange = ws.Range(ws.Cells(3, startColumn + 2), ws.Cells(lastRow, startColumn + 17))
+    Set nameRange = ws.Range(ws.Cells(3, startColumn + 18), ws.Cells(lastRow, startColumn + 42))
+    Set numberRange = ws.Range(ws.Cells(3, startColumn + 43), ws.Cells(lastRow, startColumn + 47))
+
+    For Each logicalRange In Array(noRange, idRange, nameRange, numberRange)
+        logicalRange.Borders.LineStyle = xlNone
+        logicalRange.Interior.Pattern = xlPatternNone
+        ApplyOuterBorder logicalRange
+        ApplyInsideHorizontalBorder logicalRange
+    Next logicalRange
+
+    noRange.HorizontalAlignment = xlCenter
+    idRange.HorizontalAlignment = xlLeft
+    nameRange.HorizontalAlignment = xlLeft
+    numberRange.HorizontalAlignment = xlLeft
+    noRange.VerticalAlignment = xlCenter
+    idRange.VerticalAlignment = xlCenter
+    nameRange.VerticalAlignment = xlCenter
+    numberRange.VerticalAlignment = xlCenter
+
+    ws.Range(ws.Cells(3, startColumn), ws.Cells(3, startColumn + 47)).Interior.Color = OUTPUT_FILL_COLOR
+    ws.Range(ws.Cells(3, startColumn), ws.Cells(3, startColumn + 47)).Font.Bold = True
+    ApplyBottomBorder ws.Range(ws.Cells(3, startColumn), ws.Cells(3, startColumn + 1))
+    ApplyBottomBorder ws.Range(ws.Cells(3, startColumn + 2), ws.Cells(3, startColumn + 17))
+    ApplyBottomBorder ws.Range(ws.Cells(3, startColumn + 18), ws.Cells(3, startColumn + 42))
+    ApplyBottomBorder ws.Range(ws.Cells(3, startColumn + 43), ws.Cells(3, startColumn + 47))
+End Sub
+
+' テーブル一覧の見出しと格子罫線を整える（データは保持）
+Private Sub ApplyTableListLayout(ByVal ws As Worksheet)
+    Dim lastRow As Long
+    Dim tableRange As Range
+
+    SetOutputCellText ws.Cells(1, 1), TableListIdHeader()
+    SetOutputCellText ws.Cells(1, 2), TableListNameHeader()
+    SetOutputCellText ws.Cells(1, 3), TableNumberHeader()
+    lastRow = MaxLong(LastUsedRowInColumn(ws, 1), 1)
+    Set tableRange = ws.Range(ws.Cells(1, 1), ws.Cells(lastRow, 3))
+    tableRange.Borders.LineStyle = xlNone
+    ApplyOuterBorder tableRange
+    ApplyInsideHorizontalBorder tableRange
+    If tableRange.Columns.Count > 1 Then
+        With tableRange.Borders(xlInsideVertical)
+            .LineStyle = xlContinuous
+            .Weight = xlThin
+            .Color = vbBlack
+        End With
+    End If
+    tableRange.Interior.Pattern = xlPatternNone
+    ws.Range("A1:C1").Interior.Color = OUTPUT_FILL_COLOR
+    ws.Range("A1:C1").Font.Bold = True
+    ws.Range("A:C").Font.Name = OutputFontName()
+    ws.Range("A:C").Font.Size = OutputFontSize()
+    ws.Range("A:C").WrapText = False
+    ws.Range("A:C").ShrinkToFit = False
+    ws.Columns("A").ColumnWidth = 20
+    ws.Columns("B").ColumnWidth = 24
+    ws.Columns("C").ColumnWidth = 12
+    ApplyOutputSheetView ws
+End Sub
+
+' テーブル一覧を大文字小文字を無視するマスターへ読み込み、重複を収集
+Private Sub LoadTableMaster( _
+    ByVal ws As Worksheet, _
+    ByRef tableMaster As Object, _
+    ByRef duplicateTableIds As Collection)
+
+    Dim duplicateSeen As Object
+    Dim rowNumber As Long
+    Dim lastRow As Long
+    Dim tableId As String
+
+    Set tableMaster = CreateCaseInsensitiveTextDictionary()
+    Set duplicateSeen = CreateCaseInsensitiveTextDictionary()
+    Set duplicateTableIds = New Collection
+    lastRow = LastUsedRowInColumn(ws, 1)
+
+    For rowNumber = 2 To lastRow
+        tableId = NormalizePhysicalTableId(CStr(ws.Cells(rowNumber, 1).Value))
+        If Len(tableId) > 0 Then
+            If tableMaster.Exists(tableId) Then
+                If Not duplicateSeen.Exists(tableId) Then
+                    duplicateSeen.Add tableId, True
+                    duplicateTableIds.Add tableId
+                End If
+            Else
+                tableMaster.Add tableId, Array( _
+                    tableId, _
+                    CStr(ws.Cells(rowNumber, 2).Value), _
+                    CStr(ws.Cells(rowNumber, 3).Value))
+            End If
+        End If
+    Next rowNumber
+End Sub
+
+' 物理テーブルIDの前後空白と外側の角括弧を正規化
+Private Function NormalizePhysicalTableId(ByVal tableId As String) As String
+    tableId = Trim$(tableId)
+    If Len(tableId) >= 2 And Left$(tableId, 1) = "[" And Right$(tableId, 1) = "]" Then
+        tableId = Replace(Mid$(tableId, 2, Len(tableId) - 2), "]]", "]")
+    End If
+    NormalizePhysicalTableId = Trim$(tableId)
+End Function
+
+' テーブルID照合用の大文字小文字を無視する辞書を作成
+Private Function CreateCaseInsensitiveTextDictionary() As Object
+    Set CreateCaseInsensitiveTextDictionary = CreateObject("Scripting.Dictionary")
+    CreateCaseInsensitiveTextDictionary.CompareMode = vbTextCompare
+End Function
+
+' テーブル一覧の重複を解析継続方針とともに1メッセージへまとめる
+Public Function DuplicateTableWarningMessage(ByVal duplicateTableIds As Collection) As String
+    Dim tableId As Variant
+    Dim messageText As String
+
+    messageText = W(&H30C6, &H30FC, &H30D6, &H30EB, &H4E00, &H89A7, &H306B, &H91CD, &H8907, &H3059, &H308B) & _
+        TableListIdHeader() & W(&H304C, &H3042, &H308A, &H307E, &H3059, &H3002) & vbCrLf & _
+        W(&H5148, &H982D, &H884C, &H3092, &H4F7F, &H7528, &H3057, &H3066, &H89E3, &H6790, &H3092, &H7D9A, &H884C, &H3057, &H307E, &H3059, &H3002)
+    For Each tableId In duplicateTableIds
+        messageText = messageText & vbCrLf & "- " & CStr(tableId)
+    Next tableId
+
+    DuplicateTableWarningMessage = messageText
 End Function
 
 ' parserが補完したプレフィックスを行別の変換内容へ反映
@@ -1658,7 +2056,9 @@ Private Sub ClearOutputSheet(ByVal ws As Worksheet, Optional ByVal applyLayout A
 End Sub
 
 ' アウトプット範囲の最終使用行を取得
-Private Function LastOutputRow(ByVal ws As Worksheet) As Long
+Private Function LastOutputRow( _
+    ByVal ws As Worksheet, _
+    Optional ByVal lastColumn As Long = OUTPUT_LAST_COLUMN) As Long
     Dim outputRange As Range
     Dim foundCell As Range
 
@@ -1666,7 +2066,7 @@ Private Function LastOutputRow(ByVal ws As Worksheet) As Long
     ' 値が存在し得る使用範囲だけへ絞り、全104万行の反復検索を避ける
     Set outputRange = Intersect( _
         ws.UsedRange, _
-        ws.Range(ws.Columns(1), ws.Columns(OUTPUT_LAST_COLUMN)))
+        ws.Range(ws.Columns(1), ws.Columns(lastColumn)))
     If outputRange Is Nothing Then Exit Function
 
     Set foundCell = outputRange.Find( _
@@ -1795,9 +2195,49 @@ Private Function SqlSheetName() As String
     SqlSheetName = "SQL" & W(&H89E3, &H6790)
 End Function
 
-' アウトプットシート名を取得
+' アウトプット①シート名を取得
 Private Function OutputSheetName() As String
-    OutputSheetName = W(&H30A2, &H30A6, &H30C8, &H30D7, &H30C3, &H30C8)
+    OutputSheetName = LegacyOutputSheetName() & ChrW$(&H2460)
+End Function
+
+' 旧アウトプットシート名を取得
+Private Function LegacyOutputSheetName() As String
+    LegacyOutputSheetName = W(&H30A2, &H30A6, &H30C8, &H30D7, &H30C3, &H30C8)
+End Function
+
+' アウトプット②シート名を取得
+Private Function OutputSheetTwoName() As String
+    OutputSheetTwoName = LegacyOutputSheetName() & ChrW$(&H2461)
+End Function
+
+' テーブル一覧シート名を取得
+Private Function TableListSheetName() As String
+    TableListSheetName = W(&H30C6, &H30FC, &H30D6, &H30EB, &H4E00, &H89A7)
+End Function
+
+' 入力情報タイトルを取得
+Private Function InputInformationTitle() As String
+    InputInformationTitle = ChrW$(&HFF1C) & W(&H5165, &H529B, &H60C5, &H5831) & ChrW$(&HFF1E)
+End Function
+
+' 出力情報タイトルを取得
+Private Function OutputInformationTitle() As String
+    OutputInformationTitle = ChrW$(&HFF1C) & W(&H51FA, &H529B, &H60C5, &H5831) & ChrW$(&HFF1E)
+End Function
+
+' テーブル一覧のテーブルID見出しを取得
+Private Function TableListIdHeader() As String
+    TableListIdHeader = W(&H30C6, &H30FC, &H30D6, &H30EB) & "ID"
+End Function
+
+' テーブル一覧のテーブル名称見出しを取得
+Private Function TableListNameHeader() As String
+    TableListNameHeader = W(&H30C6, &H30FC, &H30D6, &H30EB, &H540D, &H79F0)
+End Function
+
+' テーブル一覧の番号見出しを取得
+Private Function TableNumberHeader() As String
+    TableNumberHeader = W(&H756A, &H53F7)
 End Function
 
 ' アウトプットシートのフォント名を取得
@@ -1879,7 +2319,7 @@ Private Function FallbackQueryLocation(ByVal startRow As Long, ByVal endRow As L
         rowText = rowText & W(&HFF5E) & CStr(endRow)
     End If
     FallbackQueryLocation = W(&HFF08, &H5BFE, &H8C61, &H30AF, &H30A8, &H30EA) & ": " & _
-        W(&H30A2, &H30A6, &H30C8, &H30D7, &H30C3, &H30C8, &H30B7, &H30FC, &H30C8) & " " & _
+        OutputSheetName() & " " & _
         rowText & W(&H884C, &H76EE, &HFF09)
 End Function
 

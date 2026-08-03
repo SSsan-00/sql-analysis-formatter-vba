@@ -97,10 +97,11 @@ try {
     }
     $components.Import($mainModulePath) | Out-Null
     $components.Import($goldenTestModulePath) | Out-Null
+    $excel.Run("'$tempWorkbookPath'!SetupWorkbook") | Out-Null
 
     $definitionSheet = $workbook.Worksheets.Item('変換定義')
     $sqlSheet = $workbook.Worksheets.Item('SQL解析')
-    $outputSheet = $workbook.Worksheets.Item('アウトプット')
+    $outputSheet = $workbook.Worksheets.Item('アウトプット①')
     $expectationBookName = [string]$expectationBook.Name
     $outputSheetName = [string]$outputSheet.Name
     $definitionClearLastRow = [Math]::Max(2, [int]$definitionSheet.UsedRange.Rows.Count)

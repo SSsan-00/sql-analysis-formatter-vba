@@ -83,7 +83,7 @@ parser は .NET 8.0、win-x64、self-contained、単一 exe として publish �
 powershell -ExecutionPolicy Bypass -File tools/publish-parser.ps1
 ```
 
-VBA側はparserの描画計画を全行検証してから、二次元配列としてアウトプット範囲へ一括書込みします。セル単位のCOM書込みへ戻すと解析時間が増えるため、値の設定はまとめたまま維持してください。
+VBA側はparserの描画計画を全行検証してから、二次元配列として`アウトプット①`の範囲へ一括書込みします。セル単位のCOM書込みへ戻すと解析時間が増えるため、値の設定はまとめたまま維持してください。
 
 ## Bootstrap
 

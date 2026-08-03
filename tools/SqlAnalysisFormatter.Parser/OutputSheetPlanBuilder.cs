@@ -43,9 +43,15 @@ public static class OutputSheetPlanBuilder
             }
         }
 
-        var plan = BuildCore(qualifiedSql, script, mappings) with
+        var plan = BuildCore(qualifiedSql, script, mappings);
+        var usage = plan.IsFallback || !RemainingStatementsAreSupported(qualifiedSql, script, mappings)
+            ? PhysicalTableUsage.Empty
+            : PhysicalTableUsageCollector.Collect(script);
+        plan = plan with
         {
-            ReplacementQualifications = qualificationResult.Replacements
+            ReplacementQualifications = qualificationResult.Replacements,
+            InputTableIds = usage.InputTableIds,
+            OutputTableIds = usage.OutputTableIds
         };
         return ParserFieldIdentifierRestorer.Restore(plan, mappings);
     }
@@ -229,6 +235,25 @@ public static class OutputSheetPlanBuilder
         IReadOnlyList<MappingDefinition> mappings)
     {
         var statement = script.Batches.FirstOrDefault()?.Statements.FirstOrDefault();
+        return BuildStatement(sql, statement, mappings);
+    }
+
+    private static bool RemainingStatementsAreSupported(
+        string sql,
+        TSqlScript script,
+        IReadOnlyList<MappingDefinition> mappings)
+    {
+        return script.Batches
+            .SelectMany(batch => batch.Statements)
+            .Skip(1)
+            .All(statement => !BuildStatement(sql, statement, mappings).IsFallback);
+    }
+
+    private static OutputSheetPlan BuildStatement(
+        string sql,
+        TSqlStatement? statement,
+        IReadOnlyList<MappingDefinition> mappings)
+    {
         try
         {
             return statement switch
@@ -3668,7 +3693,7 @@ public static class OutputSheetPlanBuilder
         var rowText = startRow == endRow
             ? $"{startRow}行目"
             : $"{startRow}～{endRow}行目";
-        return $"フォールバック原因: {reason}（対象クエリ: アウトプットシート {rowText}）";
+        return $"フォールバック原因: {reason}（対象クエリ: アウトプット① {rowText}）";
     }
 
     /// <summary>

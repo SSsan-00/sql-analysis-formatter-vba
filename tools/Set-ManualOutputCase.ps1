@@ -53,7 +53,7 @@ try {
 
     $sqlSheet = $workbook.Worksheets.Item('SQL解析')
     $definitionSheet = $workbook.Worksheets.Item('変換定義')
-    $outputSheet = $workbook.Worksheets.Item('アウトプット')
+    $outputSheet = $workbook.Worksheets.Item('アウトプット①')
 
     $sqlSheet.Range('A2:CL1000').ClearContents() | Out-Null
     # 数値だけのSQL行もA5M2の空白を含む文字列として保持する。

@@ -32,5 +32,5 @@ SEL-082は期待値ブックと`OutputReportCases.json`へ正式登録済みで�
 powershell -ExecutionPolicy Bypass -File tools/Set-ManualOutputCase.ps1 -CaseId <case-id>
 ```
 
-`解析`を実行し、`アウトプット`シートを確認する。暫定期待値と異なる場合は、従来どおりシートへ正しい期待値を記入する。
+`解析`を実行し、`アウトプット①`シートを確認する。暫定期待値と異なる場合は、従来どおりシートへ正しい期待値を記入する。
 レビュー確定後は、`tests/SqlAnalysisFormatter.OutputExpectations.xlsx`、`ManualOutputCases.json`の`review_status`、`OutputReportCases.json`への登録、本資料を同じ変更で更新する。

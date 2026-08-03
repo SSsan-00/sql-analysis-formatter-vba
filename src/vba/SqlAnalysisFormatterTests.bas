@@ -14,11 +14,15 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     On Error GoTo TestFail
 
     SetupWorkbook_CreatesOutputSheet
+    SetupWorkbook_CreatesOutputTwoLayout
     SetupWorkbook_TracksMissingNameFillColor
     CopyOutput_CopiesRenderedRange
+    CopyOutputTwo_CopiesRenderedRange
     AnalyzeQueries_ConvertsCrudFixtures
     AnalyzeQueries_ConvertsTsqlFunctionFixtures
     AnalyzeQueries_ProcessesQueriesWithoutMappings
+    AnalyzeQueries_RendersMatchedInputAndOutputTables
+    AnalyzeQueries_LeavesOutputTwoHeaderOnlyOnFallback
     AnalyzeQueries_WritesWithSubqueriesInsideOut
     AnalyzeQueries_PreservesLeadingApostropheInOutput
     AnalyzeQueries_DisablesWrappingAfterWritingLongText
@@ -40,6 +44,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_FramesOnlyTableBody
     ClearConfirmMessage_UsesAnalysisResultWording
     ClearData_ClearsOutputSheet
+    ClearData_InitializesOutputTwoAndPreservesTableList
 
     If showMessage Then
         MsgBox "SqlAnalysisFormatter tests passed.", vbInformation
@@ -51,6 +56,40 @@ TestFail:
         MsgBox Err.Description, vbCritical
     End If
     Err.Raise Err.Number, Err.Source, Err.Description
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+Public Sub AnalyzeQueries_LeavesOutputTwoHeaderOnlyOnFallback()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim wsTableList As Worksheet
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetTwoName())
+    Set wsTableList = ThisWorkbook.Worksheets(TableListSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsTableList.Range("A2:C200").ClearContents
+    PutTableListRow wsTableList, 2, "users", UserTableText(), "U001"
+    wsSql.Cells(2, COL_SQL).Value = "CREATE TABLE dbo.users (id int)"
+
+    AnalyzeQueries False
+
+    AssertCellValue wsOutput.Range("A1"), InputInformationTitle()
+    AssertCellValue wsOutput.Range("BA1"), OutputInformationTitle()
+    AssertCellValue wsOutput.Range("A3"), "No"
+    AssertCellValue wsOutput.Range("BA3"), "No"
+    AssertCellValue wsOutput.Range("A4"), ""
+    AssertCellValue wsOutput.Range("C4"), ""
+    AssertCellValue wsOutput.Range("BA4"), ""
+    AssertCellValue wsOutput.Range("BC4"), ""
+    wsTableList.Range("A2:C200").ClearContents
 End Sub
 
 '@TestMethod("AnalyzeQueries")
@@ -83,6 +122,78 @@ Public Sub AnalyzeQueries_ProcessesQueriesWithoutMappings()
     AssertCellValue wsOutput.Cells(2, 1), _
         ReferenceTablesText() & ": " & missingNameText & "[tb1]"
     AssertCellValue wsOutput.Cells(3, 17), "tb1.name"
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+Public Sub AnalyzeQueries_RendersMatchedInputAndOutputTables()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim wsTableList As Worksheet
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetTwoName())
+    Set wsTableList = ThisWorkbook.Worksheets(TableListSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsTableList.Range("A2:C200").ClearContents
+    PutTableListRow wsTableList, 2, "[users]", UserTableText(), "U001"
+    PutTableListRow wsTableList, 3, "ORDERS", OrderTableText(), "O002"
+    PutTableListRow wsTableList, 4, "[archive_users]", "archive users", "A003"
+    ' Duplicate matching is case-insensitive and the first row wins.
+    PutTableListRow wsTableList, 5, "USERS", "duplicate user", "D999"
+    wsSql.Cells(2, COL_SQL).Value = _
+        "INSERT INTO [archive].[archive_users] (name) " & _
+        "SELECT u.name FROM [dbo].[users] AS u " & _
+        "INNER JOIN [sales].[orders] AS o ON u.user_id = o.user_id " & _
+        "LEFT JOIN [audit].[audit_logs] AS l ON u.user_id = l.user_id"
+
+    AnalyzeQueries False
+
+    AssertCellValue wsOutput.Range("A4"), "1"
+    AssertCellValue wsOutput.Range("C4"), "users"
+    AssertCellValue wsOutput.Range("S4"), UserTableText()
+    AssertCellValue wsOutput.Range("AR4"), "U001"
+    AssertCellValue wsOutput.Range("A5"), "2"
+    AssertCellValue wsOutput.Range("C5"), "orders"
+    AssertCellValue wsOutput.Range("S5"), OrderTableText()
+    AssertCellValue wsOutput.Range("AR5"), "O002"
+    AssertCellValue wsOutput.Range("C6"), ""
+    AssertCellValue wsOutput.Range("BA4"), "1"
+    AssertCellValue wsOutput.Range("BC4"), "archive_users"
+    AssertCellValue wsOutput.Range("BS4"), "archive users"
+    AssertCellValue wsOutput.Range("CR4"), "A003"
+    AssertCellValue wsOutput.Range("BC5"), ""
+
+    AssertMergedArea wsOutput.Range("A4"), "$A$4:$B$4"
+    AssertMergedArea wsOutput.Range("A5"), "$A$5:$B$5"
+    AssertMergedArea wsOutput.Range("BA4"), "$BA$4:$BB$4"
+    AssertCellNotMerged wsOutput.Range("C4")
+    AssertCellNotMerged wsOutput.Range("S4")
+    AssertCellNotMerged wsOutput.Range("AR4")
+    AssertCellNotMerged wsOutput.Range("BC4")
+    AssertCellNotMerged wsOutput.Range("BS4")
+    AssertCellNotMerged wsOutput.Range("CR4")
+    AssertHorizontalAlignment wsOutput.Range("A4"), xlCenter
+    AssertHorizontalAlignment wsOutput.Range("BA4"), xlCenter
+    AssertHorizontalAlignment wsOutput.Range("C4"), xlLeft
+    AssertHorizontalAlignment wsOutput.Range("BC4"), xlLeft
+    AssertDataBlock wsOutput.Range("A4:B4"), False
+    AssertDataBlock wsOutput.Range("A5:B5"), False
+    AssertDataBlock wsOutput.Range("C4:R4")
+    AssertDataBlock wsOutput.Range("S4:AQ4")
+    AssertDataBlock wsOutput.Range("AR4:AV4")
+    AssertDataBlock wsOutput.Range("BA4:BB4"), False
+    AssertDataBlock wsOutput.Range("BC4:BR4")
+    AssertDataBlock wsOutput.Range("BS4:CQ4")
+    AssertDataBlock wsOutput.Range("CR4:CV4")
+    AssertBlankSeparatorRange wsOutput.Range("AW1:AZ6")
+    wsTableList.Range("A2:C200").ClearContents
 End Sub
 
 '@TestMethod("AnalyzeQueries")
@@ -486,8 +597,27 @@ Public Sub SetupWorkbook_CreatesOutputSheet()
 
     SetupWorkbook
 
-    AssertWorksheetExists OutputSheetName()
+    ' Recreate the legacy state and verify that setup migrates the sheet in place.
     Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+    wsOutput.Cells(200, 1).Value = "legacy marker"
+    wsOutput.Name = LegacyOutputSheetName()
+    SetupWorkbook
+
+    If ThisWorkbook.Worksheets.Count <> 5 Then
+        Fail "SetupWorkbook should create exactly five worksheets."
+    End If
+    AssertWorksheetNameAt 1, ReferenceSheetName()
+    AssertWorksheetNameAt 2, SqlSheetName()
+    AssertWorksheetNameAt 3, OutputSheetName()
+    AssertWorksheetNameAt 4, OutputSheetTwoName()
+    AssertWorksheetNameAt 5, TableListSheetName()
+    AssertWorksheetDoesNotExist LegacyOutputSheetName()
+    AssertWorksheetExists OutputSheetName()
+    AssertWorksheetExists OutputSheetTwoName()
+    AssertWorksheetExists TableListSheetName()
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+    AssertCellValue wsOutput.Cells(200, 1), "legacy marker"
+    wsOutput.Cells(200, 1).ClearContents
     wsOutput.Cells(200, 17).WrapText = True
     wsOutput.Cells(200, 17).ShrinkToFit = True
 
@@ -497,6 +627,89 @@ Public Sub SetupWorkbook_CreatesOutputSheet()
     AssertOutputSheetGridlinesHidden
     AssertOutputSheetFont
     AssertOutputTextFittingDisabled wsOutput
+End Sub
+
+'@TestMethod("SetupWorkbook")
+Public Sub SetupWorkbook_CreatesOutputTwoLayout()
+    Dim wsOutput As Worksheet
+    Dim wsTableList As Worksheet
+
+    SetupWorkbook
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetTwoName())
+    Set wsTableList = ThisWorkbook.Worksheets(TableListSheetName())
+
+    AssertCellValue wsOutput.Range("A1"), InputInformationTitle()
+    AssertCellValue wsOutput.Range("BA1"), OutputInformationTitle()
+    AssertCellValue wsOutput.Range("A2"), ""
+    AssertCellValue wsOutput.Range("BA2"), ""
+    AssertCellValue wsOutput.Range("A3"), "No"
+    AssertCellValue wsOutput.Range("C3"), TableIdHeaderText()
+    AssertCellValue wsOutput.Range("S3"), TableNameHeaderText()
+    AssertCellValue wsOutput.Range("AR3"), NumberHeaderText()
+    AssertCellValue wsOutput.Range("BA3"), "No"
+    AssertCellValue wsOutput.Range("BC3"), TableIdHeaderText()
+    AssertCellValue wsOutput.Range("BS3"), TableNameHeaderText()
+    AssertCellValue wsOutput.Range("CR3"), NumberHeaderText()
+    AssertCellHasNoEdgeBorders wsOutput.Range("A1")
+    AssertCellHasNoEdgeBorders wsOutput.Range("BA1")
+    AssertCellHasNoEdgeBorders wsOutput.Range("A2"), False
+    AssertCellHasNoEdgeBorders wsOutput.Range("BA2"), False
+    AssertCellFont wsOutput.Range("A1"), OutputFontName(), 9
+    AssertCellFont wsOutput.Range("CV20"), OutputFontName(), 9
+    If CDbl(wsOutput.Rows(1).RowHeight) <> 13.5 Then
+        Fail "Output-two row height should be 13.5."
+    End If
+    If Abs(CDbl(wsOutput.Columns(100).ColumnWidth) - 1.14) > 0.02 Then
+        Fail "Output-two column width should be 1.14."
+    End If
+    If CBool(wsOutput.Range("CV20").WrapText) Then
+        Fail "Output-two wrap text should be disabled."
+    End If
+    If CBool(wsOutput.Range("CV20").ShrinkToFit) Then
+        Fail "Output-two shrink to fit should be disabled."
+    End If
+    AssertSheetGridlinesHidden wsOutput
+
+    AssertMergedArea wsOutput.Range("A3"), "$A$3:$B$3"
+    AssertMergedArea wsOutput.Range("BA3"), "$BA$3:$BB$3"
+    AssertCellNotMerged wsOutput.Range("C3")
+    AssertCellNotMerged wsOutput.Range("S3")
+    AssertCellNotMerged wsOutput.Range("AR3")
+    AssertCellNotMerged wsOutput.Range("BC3")
+    AssertCellNotMerged wsOutput.Range("BS3")
+    AssertCellNotMerged wsOutput.Range("CR3")
+
+    AssertHorizontalAlignment wsOutput.Range("A3"), xlCenter
+    AssertHorizontalAlignment wsOutput.Range("BA3"), xlCenter
+    AssertHorizontalAlignment wsOutput.Range("C3"), xlLeft
+    AssertHorizontalAlignment wsOutput.Range("S3"), xlLeft
+    AssertHorizontalAlignment wsOutput.Range("AR3"), xlLeft
+    AssertHorizontalAlignment wsOutput.Range("BC3"), xlLeft
+    AssertHorizontalAlignment wsOutput.Range("BS3"), xlLeft
+    AssertHorizontalAlignment wsOutput.Range("CR3"), xlLeft
+
+    AssertHeaderBlock wsOutput.Range("A3:B3"), False
+    AssertHeaderBlock wsOutput.Range("C3:R3"), True
+    AssertHeaderBlock wsOutput.Range("S3:AQ3"), True
+    AssertHeaderBlock wsOutput.Range("AR3:AV3"), True
+    AssertHeaderBlock wsOutput.Range("BA3:BB3"), False
+    AssertHeaderBlock wsOutput.Range("BC3:BR3"), True
+    AssertHeaderBlock wsOutput.Range("BS3:CQ3"), True
+    AssertHeaderBlock wsOutput.Range("CR3:CV3"), True
+    AssertBlankSeparatorRange wsOutput.Range("AW1:AZ4")
+
+    AssertCellValue wsTableList.Range("A1"), TableIdHeaderText()
+    AssertCellValue wsTableList.Range("B1"), TableNameHeaderText()
+    AssertCellValue wsTableList.Range("C1"), NumberHeaderText()
+    If CLng(wsTableList.Range("A1").Interior.Color) <> OUTPUT_FILL_COLOR Then
+        Fail "Table-list header fill color is invalid."
+    End If
+    AssertRangeBorder wsTableList.Range("A1:C1"), xlEdgeLeft, xlContinuous
+    AssertRangeBorder wsTableList.Range("A1:C1"), xlEdgeTop, xlContinuous
+    AssertRangeBorder wsTableList.Range("A1:C1"), xlEdgeBottom, xlContinuous
+    AssertRangeBorder wsTableList.Range("A1:C1"), xlEdgeRight, xlContinuous
+    AssertRangeBorder wsTableList.Range("A1:C1"), xlInsideVertical, xlContinuous
+    AssertOutputTwoCopyButton wsOutput
 End Sub
 
 '@TestMethod("SetupWorkbook")
@@ -550,6 +763,33 @@ Public Sub CopyOutput_CopiesRenderedRange()
         Fail "Output range was not copied."
     End If
     Application.CutCopyMode = False
+End Sub
+
+'@TestMethod("CopyOutputTwo")
+Public Sub CopyOutputTwo_CopiesRenderedRange()
+    Dim wsOutput As Worksheet
+    Dim pasteSheet As Worksheet
+    Dim previousDisplayAlerts As Boolean
+
+    SetupWorkbook
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetTwoName())
+    wsOutput.Cells(1, 1).Value = InputInformationTitle()
+    wsOutput.Cells(4, 100).Value = "last column"
+    Application.CutCopyMode = False
+
+    CopyOutputTwo False
+
+    If Application.CutCopyMode <> xlCopy Then
+        Fail "Output-two range was not copied."
+    End If
+    Set pasteSheet = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+    pasteSheet.Range("A1").PasteSpecial xlPasteAll
+    AssertCellValue pasteSheet.Cells(4, 100), "last column"
+    Application.CutCopyMode = False
+    previousDisplayAlerts = Application.DisplayAlerts
+    Application.DisplayAlerts = False
+    pasteSheet.Delete
+    Application.DisplayAlerts = previousDisplayAlerts
 End Sub
 
 '@TestMethod("AnalyzeQueries")
@@ -904,6 +1144,55 @@ Public Sub ClearData_ClearsOutputSheet()
     AssertSheetViewReset wsRef
     AssertSheetViewReset wsSql
     AssertSheetViewReset wsOutput
+End Sub
+
+'@TestMethod("ClearData")
+Public Sub ClearData_InitializesOutputTwoAndPreservesTableList()
+    Dim activeSheetBeforeClear As Object
+    Dim wsOutput As Worksheet
+    Dim wsTableList As Worksheet
+
+    SetupWorkbook
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetTwoName())
+    Set wsTableList = ThisWorkbook.Worksheets(TableListSheetName())
+    wsTableList.Range("A2:C200").ClearContents
+    PutTableListRow wsTableList, 2, "users", UserTableText(), "U001"
+    wsOutput.Range("A4").Value = 99
+    wsOutput.Range("C4").Value = "stale input"
+    wsOutput.Range("BA4").Value = 99
+    wsOutput.Range("BC4").Value = "stale output"
+
+    wsTableList.Activate
+    wsTableList.Cells(80, 3).Select
+    ActiveWindow.ScrollRow = 30
+    ActiveWindow.ScrollColumn = 2
+    wsOutput.Activate
+    wsOutput.Cells(100, 100).Select
+    ActiveWindow.ScrollRow = 50
+    ActiveWindow.ScrollColumn = 40
+    Set activeSheetBeforeClear = ActiveSheet
+
+    ClearData False
+
+    AssertCellValue wsTableList.Range("A2"), "users"
+    AssertCellValue wsTableList.Range("B2"), UserTableText()
+    AssertCellValue wsTableList.Range("C2"), "U001"
+    AssertCellValue wsOutput.Range("A1"), InputInformationTitle()
+    AssertCellValue wsOutput.Range("BA1"), OutputInformationTitle()
+    AssertCellValue wsOutput.Range("A3"), "No"
+    AssertCellValue wsOutput.Range("C3"), TableIdHeaderText()
+    AssertCellValue wsOutput.Range("BA3"), "No"
+    AssertCellValue wsOutput.Range("BC3"), TableIdHeaderText()
+    AssertCellValue wsOutput.Range("A4"), ""
+    AssertCellValue wsOutput.Range("C4"), ""
+    AssertCellValue wsOutput.Range("BA4"), ""
+    AssertCellValue wsOutput.Range("BC4"), ""
+    AssertBlankSeparatorRange wsOutput.Range("AW1:AZ4")
+    If Not ActiveSheet Is activeSheetBeforeClear Then
+        Fail "Active sheet changed while clearing output two."
+    End If
+    AssertSheetViewReset wsOutput
+    AssertSheetViewReset wsTableList
 End Sub
 
 ' アウトプット順序テスト用データを作成
@@ -1838,6 +2127,14 @@ Private Sub PutDefinition(ByVal ws As Worksheet, ByVal rowNumber As Long, ByVal 
     ws.Cells(rowNumber, 4).Value = fieldName
 End Sub
 
+' テーブル一覧へ1行分のマスターを設定
+Private Sub PutTableListRow(ByVal ws As Worksheet, ByVal rowNumber As Long, ByVal tableId As String, ByVal tableName As String, ByVal tableNumber As String)
+    ws.Range(ws.Cells(rowNumber, 1), ws.Cells(rowNumber, 3)).NumberFormat = "@"
+    ws.Cells(rowNumber, 1).Value = tableId
+    ws.Cells(rowNumber, 2).Value = tableName
+    ws.Cells(rowNumber, 3).Value = tableNumber
+End Sub
+
 ' SQL解析行の変換結果と変換内容を検証
 Private Sub AssertAnalyzeRow(ByVal ws As Worksheet, ByVal rowNumber As Long, ByVal expectedSql As String, ByVal expectedReplacements As Variant)
     Dim index As Long
@@ -1850,6 +2147,127 @@ Private Sub AssertAnalyzeRow(ByVal ws As Worksheet, ByVal rowNumber As Long, ByV
 
     replacementCount = UBound(expectedReplacements) - LBound(expectedReplacements) + 1
     AssertCellValue ws.Cells(rowNumber, COL_REPLACEMENT + replacementCount), ""
+End Sub
+
+' 指定位置のシート名を検証
+Private Sub AssertWorksheetNameAt(ByVal sheetIndex As Long, ByVal expectedName As String)
+    Dim actualName As String
+
+    actualName = ThisWorkbook.Worksheets(sheetIndex).Name
+    If actualName <> expectedName Then
+        Fail "Worksheet " & CStr(sheetIndex) & " expected=[" & expectedName & _
+            "] actual=[" & actualName & "]"
+    End If
+End Sub
+
+' 指定シートが存在しないことを検証
+Private Sub AssertWorksheetDoesNotExist(ByVal sheetName As String)
+    Dim ws As Worksheet
+
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets(sheetName)
+    On Error GoTo 0
+    If Not ws Is Nothing Then
+        Fail "Unexpected worksheet found: " & sheetName
+    End If
+End Sub
+
+' 指定セルの結合範囲を検証
+Private Sub AssertMergedArea(ByVal cell As Range, ByVal expectedAddress As String)
+    If Not CBool(cell.MergeCells) Then
+        Fail cell.Worksheet.Name & "!" & cell.Address(False, False) & _
+            " should be merged."
+    End If
+    If cell.MergeArea.Address <> expectedAddress Then
+        Fail cell.Worksheet.Name & "!" & cell.Address(False, False) & _
+            " merge expected=[" & expectedAddress & "] actual=[" & _
+            cell.MergeArea.Address & "]"
+    End If
+End Sub
+
+' 指定セルが結合されていないことを検証
+Private Sub AssertCellNotMerged(ByVal cell As Range)
+    If CBool(cell.MergeCells) Then
+        Fail cell.Worksheet.Name & "!" & cell.Address(False, False) & _
+            " should not be merged."
+    End If
+End Sub
+
+' 指定セルの横位置を検証
+Private Sub AssertHorizontalAlignment(ByVal cell As Range, ByVal expectedAlignment As Long)
+    If CLng(cell.HorizontalAlignment) <> expectedAlignment Then
+        Fail cell.Worksheet.Name & "!" & cell.Address(False, False) & _
+            " horizontal alignment expected=[" & CStr(expectedAlignment) & _
+            "] actual=[" & CStr(cell.HorizontalAlignment) & "]"
+    End If
+End Sub
+
+' ヘッダーの論理項目外枠、行境界、塗りつぶしを検証
+Private Sub AssertHeaderBlock(ByVal blockRange As Range, ByVal assertNoInsideVertical As Boolean)
+    AssertRangeBorder blockRange, xlEdgeLeft, xlContinuous
+    AssertRangeBorder blockRange, xlEdgeTop, xlContinuous
+    AssertRangeBorder blockRange, xlEdgeBottom, xlContinuous
+    AssertRangeBorder blockRange, xlEdgeRight, xlContinuous
+    If assertNoInsideVertical Then
+        AssertRangeBorder blockRange, xlInsideVertical, xlNone
+    End If
+    If CLng(blockRange.Cells(1, 1).Interior.Color) <> OUTPUT_FILL_COLOR Then
+        Fail blockRange.Worksheet.Name & "!" & blockRange.Address(False, False) & _
+            " header fill color is invalid."
+    End If
+    If CLng(blockRange.Cells(1, blockRange.Columns.Count).Interior.Color) <> OUTPUT_FILL_COLOR Then
+        Fail blockRange.Worksheet.Name & "!" & blockRange.Address(False, False) & _
+            " header fill does not span the logical item."
+    End If
+End Sub
+
+' データ行の論理項目外枠と行境界を検証
+Private Sub AssertDataBlock(ByVal blockRange As Range, Optional ByVal assertNoInsideVertical As Boolean = True)
+    AssertRangeBorder blockRange, xlEdgeLeft, xlContinuous
+    AssertRangeBorder blockRange, xlEdgeTop, xlContinuous
+    AssertRangeBorder blockRange, xlEdgeBottom, xlContinuous
+    AssertRangeBorder blockRange, xlEdgeRight, xlContinuous
+    If assertNoInsideVertical Then
+        AssertRangeBorder blockRange, xlInsideVertical, xlNone
+    End If
+    AssertCellHasNoDisplayFill blockRange.Cells(1, 1)
+End Sub
+
+' 罫線種別を検証
+Private Sub AssertRangeBorder(ByVal targetRange As Range, ByVal borderIndex As Long, ByVal expectedLineStyle As Long)
+    Dim actualLineStyle As Variant
+
+    actualLineStyle = targetRange.Borders(borderIndex).LineStyle
+    If IsNull(actualLineStyle) Then
+        Fail targetRange.Worksheet.Name & "!" & targetRange.Address(False, False) & _
+            " has mixed border styles."
+    End If
+    If CLng(actualLineStyle) <> expectedLineStyle Then
+        Fail targetRange.Worksheet.Name & "!" & targetRange.Address(False, False) & _
+            " border expected=[" & CStr(expectedLineStyle) & "] actual=[" & _
+            CStr(actualLineStyle) & "]"
+    End If
+End Sub
+
+' 入力情報と出力情報の間の4列が空白であることを検証
+Private Sub AssertBlankSeparatorRange(ByVal separatorRange As Range)
+    Dim cell As Range
+
+    If Application.WorksheetFunction.CountA(separatorRange) <> 0 Then
+        Fail separatorRange.Worksheet.Name & "!" & separatorRange.Address(False, False) & _
+            " separator columns should be empty."
+    End If
+    For Each cell In separatorRange.Cells
+        If CLng(cell.DisplayFormat.Interior.Pattern) <> xlPatternNone Then
+            Fail cell.Worksheet.Name & "!" & cell.Address(False, False) & _
+                " separator cell should not have a fill."
+        End If
+    Next cell
+    ' Check an interior separator cell so neighboring block outer borders do not interfere.
+    AssertCellHasNoEdgeBorders separatorRange.Cells(1, 2)
+    If separatorRange.Rows.Count >= 3 Then
+        AssertCellHasNoEdgeBorders separatorRange.Cells(3, 2)
+    End If
 End Sub
 
 ' 指定シートが存在することを検証
@@ -1866,16 +2284,21 @@ End Sub
 
 ' アウトプットシートの目盛り線非表示を検証
 Private Sub AssertOutputSheetGridlinesHidden()
-    Dim previousSheet As Object
     Dim wsOutput As Worksheet
 
-    Set previousSheet = ActiveSheet
     Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+    AssertSheetGridlinesHidden wsOutput
+End Sub
+
+' 指定シートの目盛り線非表示を検証
+Private Sub AssertSheetGridlinesHidden(ByVal ws As Worksheet)
+    Dim previousSheet As Object
 
     ' 目盛り線の表示状態は対象シートを表示して確認
-    wsOutput.Activate
+    Set previousSheet = ActiveSheet
+    ws.Activate
     If ActiveWindow.DisplayGridlines Then
-        Fail "Output sheet gridlines should be hidden."
+        Fail ws.Name & " gridlines should be hidden."
     End If
     previousSheet.Activate
 End Sub
@@ -1934,6 +2357,19 @@ Private Sub AssertOutputCopyButton(ByVal wsOutput As Worksheet)
     If Right$(CStr(copyButton.OnAction), Len("CopyOutput")) <> "CopyOutput" Then
         Fail "Output copy button action is invalid."
     End If
+End Sub
+
+' アウトプット②のコピーボタンを検証
+Private Sub AssertOutputTwoCopyButton(ByVal wsOutput As Worksheet)
+    Dim copyButton As Shape
+
+    For Each copyButton In wsOutput.Shapes
+        If Right$(CStr(copyButton.OnAction), Len("CopyOutputTwo")) = _
+            "CopyOutputTwo" Then
+            Exit Sub
+        End If
+    Next copyButton
+    Fail "Output-two copy button was not found."
 End Sub
 
 ' フォールバックSQLの行と原因を検証
@@ -2082,12 +2518,52 @@ End Function
 
 ' アウトプットシート名を返す
 Private Function OutputSheetName() As String
-    OutputSheetName = W(&H30A2, &H30A6, &H30C8, &H30D7, &H30C3, &H30C8)
+    OutputSheetName = LegacyOutputSheetName() & W(&H2460)
+End Function
+
+' アウトプット②シート名を返す
+Private Function OutputSheetTwoName() As String
+    OutputSheetTwoName = LegacyOutputSheetName() & W(&H2461)
+End Function
+
+' テーブル一覧シート名を返す
+Private Function TableListSheetName() As String
+    TableListSheetName = W(&H30C6, &H30FC, &H30D6, &H30EB, &H4E00, &H89A7)
+End Function
+
+' 旧アウトプットシート名を返す
+Private Function LegacyOutputSheetName() As String
+    LegacyOutputSheetName = W(&H30A2, &H30A6, &H30C8, &H30D7, &H30C3, &H30C8)
 End Function
 
 ' アウトプット用フォント名を返す
 Private Function OutputFontName() As String
     OutputFontName = W(&HFF2D, &HFF33, &H20, &H30B4, &H30B7, &H30C3, &H30AF)
+End Function
+
+' アウトプット②入力情報タイトルを返す
+Private Function InputInformationTitle() As String
+    InputInformationTitle = W(&HFF1C, &H5165, &H529B, &H60C5, &H5831, &HFF1E)
+End Function
+
+' アウトプット②出力情報タイトルを返す
+Private Function OutputInformationTitle() As String
+    OutputInformationTitle = W(&HFF1C, &H51FA, &H529B, &H60C5, &H5831, &HFF1E)
+End Function
+
+' テーブルIDヘッダーを返す
+Private Function TableIdHeaderText() As String
+    TableIdHeaderText = W(&H30C6, &H30FC, &H30D6, &H30EB) & "ID"
+End Function
+
+' テーブル名称ヘッダーを返す
+Private Function TableNameHeaderText() As String
+    TableNameHeaderText = W(&H30C6, &H30FC, &H30D6, &H30EB, &H540D, &H79F0)
+End Function
+
+' 番号ヘッダーを返す
+Private Function NumberHeaderText() As String
+    NumberHeaderText = W(&H756A, &H53F7)
 End Function
 
 ' サブクエリ表のタイトルを返す
@@ -2128,9 +2604,8 @@ Private Function ExpectedFallbackLocation(ByVal startRow As Long, ByVal endRow A
     If endRow <> startRow Then
         rowText = rowText & W(&HFF5E) & CStr(endRow)
     End If
-    ExpectedFallbackLocation = W(&HFF08, &H5BFE, &H8C61, &H30AF, &H30A8, &H30EA, &H3A, &H20, _
-        &H30A2, &H30A6, &H30C8, &H30D7, &H30C3, &H30C8, &H30B7, &H30FC, &H30C8, &H20) & _
-        rowText & W(&H884C, &H76EE, &HFF09)
+    ExpectedFallbackLocation = W(&HFF08, &H5BFE, &H8C61, &H30AF, &H30A8, &H30EA, &H3A, &H20) & _
+        OutputSheetName() & " " & rowText & W(&H884C, &H76EE, &HFF09)
 End Function
 
 ' ユーザーテーブル和名を返す

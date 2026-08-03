@@ -68,11 +68,15 @@ try {
     Release-ComObject $importedComponent
     $testMacros = @(
         'SetupWorkbook_CreatesOutputSheet',
+        'SetupWorkbook_CreatesOutputTwoLayout',
         'SetupWorkbook_TracksMissingNameFillColor',
         'CopyOutput_CopiesRenderedRange',
+        'CopyOutputTwo_CopiesRenderedRange',
         'AnalyzeQueries_ConvertsCrudFixtures',
         'AnalyzeQueries_ConvertsTsqlFunctionFixtures',
         'AnalyzeQueries_ProcessesQueriesWithoutMappings',
+        'AnalyzeQueries_RendersMatchedInputAndOutputTables',
+        'AnalyzeQueries_LeavesOutputTwoHeaderOnlyOnFallback',
         'AnalyzeQueries_WritesWithSubqueriesInsideOut',
         'AnalyzeQueries_PreservesLeadingApostropheInOutput',
         'AnalyzeQueries_DisablesWrappingAfterWritingLongText',
@@ -93,7 +97,8 @@ try {
         'AnalyzeQueries_WritesUnsupportedQueryAsIs',
         'AnalyzeQueries_FramesOnlyTableBody',
         'ClearConfirmMessage_UsesAnalysisResultWording',
-        'ClearData_ClearsOutputSheet'
+        'ClearData_ClearsOutputSheet',
+        'ClearData_InitializesOutputTwoAndPreservesTableList'
     )
     if ($TestName.Count -gt 0) {
         $testMacros = @($testMacros | Where-Object { $_ -in $TestName })

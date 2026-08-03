@@ -3672,7 +3672,7 @@ public sealed class OutputSheetPlanBuilderTests
             plan,
             (1, 1, "INSERT INTO users (id)"),
             (2, 1, "EXEC dbo.GetUserIds"),
-            (4, 1, "フォールバック原因: 未対応のINSERT形式: EXECUTE（対象クエリ: アウトプットシート 1～2行目）"));
+            (4, 1, "フォールバック原因: 未対応のINSERT形式: EXECUTE（対象クエリ: アウトプット① 1～2行目）"));
     }
 
     /// <summary>
