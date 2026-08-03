@@ -18,6 +18,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     CopyOutput_CopiesRenderedRange
     AnalyzeQueries_ConvertsCrudFixtures
     AnalyzeQueries_ConvertsTsqlFunctionFixtures
+    AnalyzeQueries_ProcessesQueriesWithoutMappings
     AnalyzeQueries_WritesWithSubqueriesInsideOut
     AnalyzeQueries_PreservesLeadingApostropheInOutput
     AnalyzeQueries_DisablesWrappingAfterWritingLongText
@@ -50,6 +51,38 @@ TestFail:
         MsgBox Err.Description, vbCritical
     End If
     Err.Raise Err.Number, Err.Source, Err.Description
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' 変換定義が空でも物理名のまま解析表とアウトプットを作成できることを確認
+Public Sub AnalyzeQueries_ProcessesQueriesWithoutMappings()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim missingNameText As String
+    Dim sqlText As String
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    sqlText = "SELECT tb1.name FROM users AS tb1"
+    wsSql.Cells(2, COL_SQL).Value = sqlText
+
+    AnalyzeQueries False
+
+    missingNameText = "(" & W(&H548C, &H540D, &H672A, &H53D6, &H5F97) & ")"
+    AssertCellValue wsSql.Cells(2, COL_RESULT), sqlText
+    AssertCellValue wsOutput.Cells(1, 1), SelectOutputTitle()
+    AssertCellValue wsOutput.Cells(2, 1), _
+        ReferenceTablesText() & ": " & missingNameText & "[tb1]"
+    AssertCellValue wsOutput.Cells(3, 17), "tb1.name"
 End Sub
 
 '@TestMethod("AnalyzeQueries")

@@ -72,14 +72,6 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     Set qualifications = New Collection
 
     LoadMappings wsRef, qualifiedMap, standaloneMap, qualifiedParserMap, standaloneParserMap
-    If qualifiedMap.Count = 0 And standaloneMap.Count = 0 Then
-        If showMessage Then
-            MsgBox NoDefinitionMessage(), vbInformation
-        End If
-        RestoreFindSearchOrderByRows wsSql
-        Exit Sub
-    End If
-
     qualifiedKeys = SortedKeysByLengthDesc(qualifiedMap)
     standaloneKeys = SortedKeysByLengthDesc(standaloneMap)
 
@@ -1959,9 +1951,4 @@ End Function
 ' 確認ダイアログのタイトルを取得
 Private Function ConfirmTitle() As String
     ConfirmTitle = W(&H78BA, &H8A8D)
-End Function
-
-' 変換定義なしメッセージを取得
-Private Function NoDefinitionMessage() As String
-    NoDefinitionMessage = W(&H5909, &H63DB, &H5B9A, &H7FA9, &H30B7, &H30FC, &H30C8, &H306B, &H6709, &H52B9, &H306A, &H5909, &H63DB, &H5B9A, &H7FA9, &H304C, &H3042, &H308A, &H307E, &H305B, &H3093, &H3002)
 End Function

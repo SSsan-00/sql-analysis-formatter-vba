@@ -72,6 +72,7 @@ try {
         'CopyOutput_CopiesRenderedRange',
         'AnalyzeQueries_ConvertsCrudFixtures',
         'AnalyzeQueries_ConvertsTsqlFunctionFixtures',
+        'AnalyzeQueries_ProcessesQueriesWithoutMappings',
         'AnalyzeQueries_WritesWithSubqueriesInsideOut',
         'AnalyzeQueries_PreservesLeadingApostropheInOutput',
         'AnalyzeQueries_DisablesWrappingAfterWritingLongText',
