@@ -4,25 +4,19 @@ namespace SqlAnalysisFormatter.Parser;
 
 internal sealed record PhysicalTableUsage(
     IReadOnlyList<string> InputTableIds,
-    IReadOnlyList<string> OutputTableIds)
-{
-    public static PhysicalTableUsage Empty { get; } = new([], []);
-}
+    IReadOnlyList<string> OutputTableIds);
 
 internal static class PhysicalTableUsageCollector
 {
-    public static PhysicalTableUsage Collect(TSqlScript script)
+    public static PhysicalTableUsage Collect(IEnumerable<TSqlStatement> statements)
     {
-        ArgumentNullException.ThrowIfNull(script);
+        ArgumentNullException.ThrowIfNull(statements);
 
         var inputs = new OrderedTableIds();
         var outputs = new OrderedTableIds();
-        foreach (var batch in script.Batches)
+        foreach (var statement in statements)
         {
-            foreach (var statement in batch.Statements)
-            {
-                CollectStatement(statement, inputs, outputs);
-            }
+            CollectStatement(statement, inputs, outputs);
         }
 
         return new PhysicalTableUsage(inputs.Items, outputs.Items);

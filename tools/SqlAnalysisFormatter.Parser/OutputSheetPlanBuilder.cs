@@ -43,10 +43,19 @@ public static class OutputSheetPlanBuilder
             }
         }
 
-        var plan = BuildCore(qualifiedSql, script, mappings);
-        var usage = plan.IsFallback || !RemainingStatementsAreSupported(qualifiedSql, script, mappings)
-            ? PhysicalTableUsage.Empty
-            : PhysicalTableUsageCollector.Collect(script);
+        var statementPlans = script.Batches
+            .SelectMany(batch => batch.Statements)
+            .Select(statement => (
+                Statement: statement,
+                Plan: BuildStatement(qualifiedSql, statement, mappings)))
+            .ToArray();
+        var plan = statementPlans.Length > 0
+            ? statementPlans[0].Plan
+            : BuildStatement(qualifiedSql, null, mappings);
+        var usage = PhysicalTableUsageCollector.Collect(
+            statementPlans
+                .Where(result => !result.Plan.IsFallback)
+                .Select(result => result.Statement));
         plan = plan with
         {
             ReplacementQualifications = qualificationResult.Replacements,
@@ -224,29 +233,6 @@ public static class OutputSheetPlanBuilder
                     mapping.ParserFieldId,
                     fieldId,
                     StringComparison.OrdinalIgnoreCase));
-    }
-
-    /// <summary>
-    /// SQLを解析して復元前の描画計画を作成
-    /// </summary>
-    private static OutputSheetPlan BuildCore(
-        string sql,
-        TSqlScript script,
-        IReadOnlyList<MappingDefinition> mappings)
-    {
-        var statement = script.Batches.FirstOrDefault()?.Statements.FirstOrDefault();
-        return BuildStatement(sql, statement, mappings);
-    }
-
-    private static bool RemainingStatementsAreSupported(
-        string sql,
-        TSqlScript script,
-        IReadOnlyList<MappingDefinition> mappings)
-    {
-        return script.Batches
-            .SelectMany(batch => batch.Statements)
-            .Skip(1)
-            .All(statement => !BuildStatement(sql, statement, mappings).IsFallback);
     }
 
     private static OutputSheetPlan BuildStatement(

@@ -936,7 +936,14 @@ Private Sub ApplyOutputTwoSheetLayout( _
     End If
     ApplyOutputSheetDimensions _
         ws, lastRow, OUTPUT_TWO_LAST_COLUMN, True, resetEntireColumns
+    ApplyOutputTwoHeaderFontWeight ws
     ApplyOutputSheetView ws
+End Sub
+
+' アウトプット②の見出しは背景色と罫線だけで区別し、太字にしない
+Private Sub ApplyOutputTwoHeaderFontWeight(ByVal ws As Worksheet)
+    ws.Range(ws.Cells(3, 1), ws.Cells(3, 48)).Font.Bold = False
+    ws.Range(ws.Cells(3, 53), ws.Cells(3, OUTPUT_TWO_LAST_COLUMN)).Font.Bold = False
 End Sub
 
 ' 変換定義A～D列の和名未取得表示を値変更へ追従させる
@@ -1523,8 +1530,10 @@ Private Function WriteOutputTwoBlock( _
     Dim rowNumber As Long
     Dim itemNumber As Long
     Dim emitted As Object
+    Dim outputRows As Collection
 
     Set emitted = CreateCaseInsensitiveTextDictionary()
+    Set outputRows = New Collection
     rowNumber = 3
     For Each tableId In tableIds
         tableId = NormalizePhysicalTableId(CStr(tableId))
@@ -1532,20 +1541,133 @@ Private Function WriteOutputTwoBlock( _
             tableRow = tableMaster(CStr(tableId))
             If Not emitted.Exists(CStr(tableId)) Then
                 emitted.Add CStr(tableId), True
-                itemNumber = itemNumber + 1
-                rowNumber = rowNumber + 1
-                ws.Range( _
-                    ws.Cells(rowNumber, startColumn), _
-                    ws.Cells(rowNumber, startColumn + 1)).Merge
-                SetOutputCellText ws.Cells(rowNumber, startColumn), CStr(itemNumber)
-                SetOutputCellText ws.Cells(rowNumber, startColumn + 2), CStr(tableId)
-                SetOutputCellText ws.Cells(rowNumber, startColumn + 18), CStr(tableRow(1))
-                SetOutputCellText ws.Cells(rowNumber, startColumn + 43), CStr(tableRow(2))
+                InsertOutputTwoRowByNumber outputRows, Array( _
+                    CStr(tableId), CStr(tableRow(1)), CStr(tableRow(2)))
             End If
         End If
     Next tableId
 
+    For Each tableRow In outputRows
+        itemNumber = itemNumber + 1
+        rowNumber = rowNumber + 1
+        ws.Range( _
+            ws.Cells(rowNumber, startColumn), _
+            ws.Cells(rowNumber, startColumn + 1)).Merge
+        SetOutputCellText ws.Cells(rowNumber, startColumn), CStr(itemNumber)
+        SetOutputCellText ws.Cells(rowNumber, startColumn + 2), CStr(tableRow(0))
+        SetOutputCellText ws.Cells(rowNumber, startColumn + 18), CStr(tableRow(1))
+        SetOutputCellText ws.Cells(rowNumber, startColumn + 43), CStr(tableRow(2))
+    Next tableRow
+
     WriteOutputTwoBlock = rowNumber
+End Function
+
+' 照合済みの明細を複合番号の昇順へ安定挿入する
+Private Sub InsertOutputTwoRowByNumber( _
+    ByVal outputRows As Collection, _
+    ByVal newRow As Variant)
+
+    Dim index As Long
+    Dim existingRow As Variant
+
+    For index = 1 To outputRows.Count
+        existingRow = outputRows(index)
+        If CompareCompositeTableNumbers( _
+            CStr(newRow(2)), CStr(existingRow(2))) < 0 Then
+
+            outputRows.Add Item:=newRow, Before:=index
+            Exit Sub
+        End If
+    Next index
+    outputRows.Add newRow
+End Sub
+
+' 「数値-数値」を前半、後半の順で比較する。形式外の値は有効値の後ろへ安定配置する
+Private Function CompareCompositeTableNumbers( _
+    ByVal leftValue As String, _
+    ByVal rightValue As String) As Long
+
+    Dim leftFirst As String
+    Dim leftSecond As String
+    Dim rightFirst As String
+    Dim rightSecond As String
+    Dim leftIsValid As Boolean
+    Dim rightIsValid As Boolean
+
+    leftIsValid = TryParseCompositeTableNumber(leftValue, leftFirst, leftSecond)
+    rightIsValid = TryParseCompositeTableNumber(rightValue, rightFirst, rightSecond)
+    If leftIsValid And Not rightIsValid Then
+        CompareCompositeTableNumbers = -1
+        Exit Function
+    End If
+    If Not leftIsValid And rightIsValid Then
+        CompareCompositeTableNumbers = 1
+        Exit Function
+    End If
+    If Not leftIsValid Then Exit Function
+
+    CompareCompositeTableNumbers = CompareUnsignedIntegerText(leftFirst, rightFirst)
+    If CompareCompositeTableNumbers = 0 Then
+        CompareCompositeTableNumbers = CompareUnsignedIntegerText(leftSecond, rightSecond)
+    End If
+End Function
+
+' 複合番号を桁あふれしない数値文字列2要素へ分解する
+Private Function TryParseCompositeTableNumber( _
+    ByVal value As String, _
+    ByRef firstNumber As String, _
+    ByRef secondNumber As String) As Boolean
+
+    Dim parts As Variant
+
+    parts = Split(Trim$(value), "-")
+    If LBound(parts) <> 0 Or UBound(parts) <> 1 Then Exit Function
+    firstNumber = Trim$(CStr(parts(0)))
+    secondNumber = Trim$(CStr(parts(1)))
+    If Not IsUnsignedIntegerText(firstNumber) Or _
+        Not IsUnsignedIntegerText(secondNumber) Then Exit Function
+
+    firstNumber = NormalizeUnsignedIntegerText(firstNumber)
+    secondNumber = NormalizeUnsignedIntegerText(secondNumber)
+    TryParseCompositeTableNumber = True
+End Function
+
+' 符号なし整数文字列を桁数、同桁なら辞書順で比較する
+Private Function CompareUnsignedIntegerText( _
+    ByVal leftValue As String, _
+    ByVal rightValue As String) As Long
+
+    If Len(leftValue) < Len(rightValue) Then
+        CompareUnsignedIntegerText = -1
+    ElseIf Len(leftValue) > Len(rightValue) Then
+        CompareUnsignedIntegerText = 1
+    Else
+        CompareUnsignedIntegerText = Sgn(StrComp(leftValue, rightValue, vbBinaryCompare))
+    End If
+End Function
+
+' 数値比較用に先頭ゼロを除去し、ゼロ自体は1文字残す
+Private Function NormalizeUnsignedIntegerText(ByVal value As String) As String
+    Dim index As Long
+
+    index = 1
+    Do While index < Len(value) And Mid$(value, index, 1) = "0"
+        index = index + 1
+    Loop
+    NormalizeUnsignedIntegerText = Mid$(value, index)
+End Function
+
+' 文字列がASCII数字だけで構成されているか判定する
+Private Function IsUnsignedIntegerText(ByVal value As String) As Boolean
+    Dim index As Long
+    Dim character As String
+
+    If Len(value) = 0 Then Exit Function
+    For index = 1 To Len(value)
+        character = Mid$(value, index, 1)
+        If character < "0" Or character > "9" Then Exit Function
+    Next index
+    IsUnsignedIntegerText = True
 End Function
 
 ' アウトプット②の論理4項目へ外枠と行境界を設定
@@ -1583,7 +1705,7 @@ Private Sub ApplyOutputTwoBlockStyle( _
     numberRange.VerticalAlignment = xlCenter
 
     ws.Range(ws.Cells(3, startColumn), ws.Cells(3, startColumn + 47)).Interior.Color = OUTPUT_FILL_COLOR
-    ws.Range(ws.Cells(3, startColumn), ws.Cells(3, startColumn + 47)).Font.Bold = True
+    ws.Range(ws.Cells(3, startColumn), ws.Cells(3, startColumn + 47)).Font.Bold = False
     ApplyBottomBorder ws.Range(ws.Cells(3, startColumn), ws.Cells(3, startColumn + 1))
     ApplyBottomBorder ws.Range(ws.Cells(3, startColumn + 2), ws.Cells(3, startColumn + 17))
     ApplyBottomBorder ws.Range(ws.Cells(3, startColumn + 18), ws.Cells(3, startColumn + 42))
@@ -1617,6 +1739,7 @@ Private Sub ApplyTableListLayout(ByVal ws As Worksheet)
     ws.Range("A:C").Font.Size = OutputFontSize()
     ws.Range("A:C").WrapText = False
     ws.Range("A:C").ShrinkToFit = False
+    ws.Columns("C").NumberFormat = "@"
     ws.Columns("A").ColumnWidth = 20
     ws.Columns("B").ColumnWidth = 24
     ws.Columns("C").ColumnWidth = 12

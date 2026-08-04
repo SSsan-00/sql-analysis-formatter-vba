@@ -50,6 +50,30 @@ public sealed class VbaOutputProtocolTests
     }
 
     /// <summary>
+    /// 先頭がフォールバックでも後続の対応ステートメントから得たテーブル情報を直列化することを確認
+    /// </summary>
+    [TestMethod]
+    public void SerializePlan_WritesPartialTableUsageForFallbackPlan()
+    {
+        const string sql = """
+            CREATE INDEX IX_ignored_id ON dbo.ignored_table(id);
+            SELECT u.id FROM dbo.users AS u;
+            """;
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        var text = VbaOutputProtocol.SerializePlan(plan);
+
+        Assert.IsTrue(plan.IsFallback);
+        StringAssert.Contains(text, "T\tINPUT\tusers");
+        Assert.IsFalse(text.Contains(
+            "T\tINPUT\tignored_table",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(text.Contains(
+            "T\tOUTPUT\tignored_table",
+            StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
     /// エスケープ済み和名定義を復元できることを確認
     /// </summary>
     [TestMethod]

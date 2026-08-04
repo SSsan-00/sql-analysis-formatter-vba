@@ -23,6 +23,8 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_ConvertsTsqlFunctionFixtures
     AnalyzeQueries_ProcessesQueriesWithoutMappings
     AnalyzeQueries_RendersMatchedInputAndOutputTables
+    AnalyzeQueries_RendersSupportedTablesDuringPartialFallback
+    AnalyzeQueries_SortsOutputTwoByCompositeTableNumber
     AnalyzeQueries_LeavesOutputTwoHeaderOnlyOnFallback
     AnalyzeQueries_WritesWithSubqueriesInsideOut
     AnalyzeQueries_PreservesLeadingApostropheInOutput
@@ -234,7 +236,7 @@ Public Sub AnalyzeQueries_LeavesOutputTwoHeaderOnlyOnFallback()
     wsRef.Range("A2:D200").ClearContents
     wsSql.Range("A2:Z200").ClearContents
     wsTableList.Range("A2:C200").ClearContents
-    PutTableListRow wsTableList, 2, "users", UserTableText(), "U001"
+    PutTableListRow wsTableList, 2, "users", UserTableText(), "1-1"
     wsSql.Cells(2, COL_SQL).Value = "CREATE TABLE dbo.users (id int)"
 
     AnalyzeQueries False
@@ -300,11 +302,11 @@ Public Sub AnalyzeQueries_RendersMatchedInputAndOutputTables()
     wsRef.Range("A2:D200").ClearContents
     wsSql.Range("A2:Z200").ClearContents
     wsTableList.Range("A2:C200").ClearContents
-    PutTableListRow wsTableList, 2, "[users]", UserTableText(), "U001"
-    PutTableListRow wsTableList, 3, "ORDERS", OrderTableText(), "O002"
-    PutTableListRow wsTableList, 4, "[archive_users]", "archive users", "A003"
+    PutTableListRow wsTableList, 2, "[users]", UserTableText(), "1-1"
+    PutTableListRow wsTableList, 3, "ORDERS", OrderTableText(), "2-1"
+    PutTableListRow wsTableList, 4, "[archive_users]", "archive users", "3-1"
     ' Duplicate matching is case-insensitive and the first row wins.
-    PutTableListRow wsTableList, 5, "USERS", "duplicate user", "D999"
+    PutTableListRow wsTableList, 5, "USERS", "duplicate user", "9-9"
     wsSql.Cells(2, COL_SQL).Value = _
         "INSERT INTO [archive].[archive_users] (name) " & _
         "SELECT u.name FROM [dbo].[users] AS u " & _
@@ -316,16 +318,16 @@ Public Sub AnalyzeQueries_RendersMatchedInputAndOutputTables()
     AssertCellValue wsOutput.Range("A4"), "1"
     AssertCellValue wsOutput.Range("C4"), "users"
     AssertCellValue wsOutput.Range("S4"), UserTableText()
-    AssertCellValue wsOutput.Range("AR4"), "U001"
+    AssertCellValue wsOutput.Range("AR4"), "1-1"
     AssertCellValue wsOutput.Range("A5"), "2"
     AssertCellValue wsOutput.Range("C5"), "orders"
     AssertCellValue wsOutput.Range("S5"), OrderTableText()
-    AssertCellValue wsOutput.Range("AR5"), "O002"
+    AssertCellValue wsOutput.Range("AR5"), "2-1"
     AssertCellValue wsOutput.Range("C6"), ""
     AssertCellValue wsOutput.Range("BA4"), "1"
     AssertCellValue wsOutput.Range("BC4"), "archive_users"
     AssertCellValue wsOutput.Range("BS4"), "archive users"
-    AssertCellValue wsOutput.Range("CR4"), "A003"
+    AssertCellValue wsOutput.Range("CR4"), "3-1"
     AssertCellValue wsOutput.Range("BC5"), ""
 
     AssertMergedArea wsOutput.Range("A4"), "$A$4:$B$4"
@@ -351,6 +353,100 @@ Public Sub AnalyzeQueries_RendersMatchedInputAndOutputTables()
     AssertDataBlock wsOutput.Range("BS4:CQ4")
     AssertDataBlock wsOutput.Range("CR4:CV4")
     AssertBlankSeparatorRange wsOutput.Range("AW1:AZ6")
+    wsTableList.Range("A2:C200").ClearContents
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' 未対応ステートメントを除外し、対応できたステートメントのテーブルだけを描画することを確認
+Public Sub AnalyzeQueries_RendersSupportedTablesDuringPartialFallback()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim wsTableList As Worksheet
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetTwoName())
+    Set wsTableList = ThisWorkbook.Worksheets(TableListSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsTableList.Range("A2:C200").ClearContents
+    PutTableListRow wsTableList, 2, "users", UserTableText(), "2-10"
+    PutTableListRow wsTableList, 3, "active_users", "active users", "1-2"
+    PutTableListRow wsTableList, 4, "audit_log", "audit log", "3-1"
+    PutTableListRow wsTableList, 5, "ignored_table", "ignored table", "0-1"
+    wsSql.Cells(2, COL_SQL).Value = _
+        "SELECT * FROM dbo.users;" & vbCrLf & _
+        "CREATE INDEX IX_ignored_id ON dbo.ignored_table(id);" & vbCrLf & _
+        "INSERT INTO dbo.audit_log(user_id) " & _
+        "SELECT id FROM dbo.active_users;"
+
+    AnalyzeQueries False
+
+    AssertCellValue wsOutput.Range("A4"), "1"
+    AssertCellValue wsOutput.Range("C4"), "active_users"
+    AssertCellValue wsOutput.Range("AR4"), "1-2"
+    AssertCellValue wsOutput.Range("A5"), "2"
+    AssertCellValue wsOutput.Range("C5"), "users"
+    AssertCellValue wsOutput.Range("AR5"), "2-10"
+    AssertCellValue wsOutput.Range("C6"), ""
+    AssertCellValue wsOutput.Range("BA4"), "1"
+    AssertCellValue wsOutput.Range("BC4"), "audit_log"
+    AssertCellValue wsOutput.Range("CR4"), "3-1"
+    AssertCellValue wsOutput.Range("BC5"), ""
+    wsTableList.Range("A2:C200").ClearContents
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' 番号を数値2要素として比較し、入力・出力の各ブロックを昇順へ並べることを確認
+Public Sub AnalyzeQueries_SortsOutputTwoByCompositeTableNumber()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim wsTableList As Worksheet
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetTwoName())
+    Set wsTableList = ThisWorkbook.Worksheets(TableListSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsTableList.Range("A2:C200").ClearContents
+    PutTableListRow wsTableList, 2, "input_late", "input late", "10-1"
+    PutTableListRow wsTableList, 3, "input_early", "input early", "1-10"
+    PutTableListRow wsTableList, 4, "input_middle", "input middle", "1-2"
+    PutTableListRow wsTableList, 5, "output_late", "output late", "10-2"
+    PutTableListRow wsTableList, 6, "output_early", "output early", "2-10"
+    PutTableListRow wsTableList, 7, "output_middle", "output middle", "2-2"
+    PutTableListRow wsTableList, 8, "input_middle_later", "input middle later", "1-2"
+    PutTableListRow wsTableList, 9, "output_middle_later", "output middle later", "2-2"
+    wsSql.Cells(2, COL_SQL).Value = _
+        "INSERT INTO dbo.output_late(id) SELECT id FROM dbo.input_late;" & vbCrLf & _
+        "INSERT INTO dbo.output_early(id) SELECT id FROM dbo.input_early;" & vbCrLf & _
+        "INSERT INTO dbo.output_middle(id) SELECT id FROM dbo.input_middle;" & vbCrLf & _
+        "INSERT INTO dbo.output_middle_later(id) " & _
+        "SELECT id FROM dbo.input_middle_later;"
+
+    AnalyzeQueries False
+
+    AssertOutputTwoRow wsOutput, 4, 1, "input_middle", "input middle", "1-2"
+    AssertOutputTwoRow wsOutput, 5, 1, _
+        "input_middle_later", "input middle later", "1-2"
+    AssertOutputTwoRow wsOutput, 6, 1, "input_early", "input early", "1-10"
+    AssertOutputTwoRow wsOutput, 7, 1, "input_late", "input late", "10-1"
+    AssertOutputTwoRow wsOutput, 4, 53, "output_middle", "output middle", "2-2"
+    AssertOutputTwoRow wsOutput, 5, 53, _
+        "output_middle_later", "output middle later", "2-2"
+    AssertOutputTwoRow wsOutput, 6, 53, "output_early", "output early", "2-10"
+    AssertOutputTwoRow wsOutput, 7, 53, "output_late", "output late", "10-2"
     wsTableList.Range("A2:C200").ClearContents
 End Sub
 
@@ -795,6 +891,10 @@ Public Sub SetupWorkbook_CreatesOutputTwoLayout()
     SetupWorkbook
     Set wsOutput = ThisWorkbook.Worksheets(OutputSheetTwoName())
     Set wsTableList = ThisWorkbook.Worksheets(TableListSheetName())
+    wsOutput.Range("A3:AV3").Font.Bold = True
+    wsOutput.Range("BA3:CV3").Font.Bold = True
+    wsTableList.Range("C2").NumberFormat = "General"
+    SetupWorkbook
 
     AssertCellValue wsOutput.Range("A1"), InputInformationTitle()
     AssertCellValue wsOutput.Range("BA1"), OutputInformationTitle()
@@ -845,6 +945,14 @@ Public Sub SetupWorkbook_CreatesOutputTwoLayout()
     AssertHorizontalAlignment wsOutput.Range("BC3"), xlLeft
     AssertHorizontalAlignment wsOutput.Range("BS3"), xlLeft
     AssertHorizontalAlignment wsOutput.Range("CR3"), xlLeft
+    AssertCellNotBold wsOutput.Range("A3")
+    AssertCellNotBold wsOutput.Range("C3")
+    AssertCellNotBold wsOutput.Range("S3")
+    AssertCellNotBold wsOutput.Range("AR3")
+    AssertCellNotBold wsOutput.Range("BA3")
+    AssertCellNotBold wsOutput.Range("BC3")
+    AssertCellNotBold wsOutput.Range("BS3")
+    AssertCellNotBold wsOutput.Range("CR3")
 
     AssertHeaderBlock wsOutput.Range("A3:B3"), False
     AssertHeaderBlock wsOutput.Range("C3:R3"), True
@@ -859,6 +967,9 @@ Public Sub SetupWorkbook_CreatesOutputTwoLayout()
     AssertCellValue wsTableList.Range("A1"), TableIdHeaderText()
     AssertCellValue wsTableList.Range("B1"), TableNameHeaderText()
     AssertCellValue wsTableList.Range("C1"), NumberHeaderText()
+    If CStr(wsTableList.Range("C2").NumberFormat) <> "@" Then
+        Fail "Table-list number column should use text format."
+    End If
     If CLng(wsTableList.Range("A1").Interior.Color) <> OUTPUT_FILL_COLOR Then
         Fail "Table-list header fill color is invalid."
     End If
@@ -1314,7 +1425,7 @@ Public Sub ClearData_InitializesOutputTwoAndPreservesTableList()
     Set wsOutput = ThisWorkbook.Worksheets(OutputSheetTwoName())
     Set wsTableList = ThisWorkbook.Worksheets(TableListSheetName())
     wsTableList.Range("A2:C200").ClearContents
-    PutTableListRow wsTableList, 2, "users", UserTableText(), "U001"
+    PutTableListRow wsTableList, 2, "users", UserTableText(), "1-1"
     wsOutput.Range("A4").Value = 99
     wsOutput.Range("C4").Value = "stale input"
     wsOutput.Range("BA4").Value = 99
@@ -1334,7 +1445,7 @@ Public Sub ClearData_InitializesOutputTwoAndPreservesTableList()
 
     AssertCellValue wsTableList.Range("A2"), "users"
     AssertCellValue wsTableList.Range("B2"), UserTableText()
-    AssertCellValue wsTableList.Range("C2"), "U001"
+    AssertCellValue wsTableList.Range("C2"), "1-1"
     AssertCellValue wsOutput.Range("A1"), InputInformationTitle()
     AssertCellValue wsOutput.Range("BA1"), OutputInformationTitle()
     AssertCellValue wsOutput.Range("A3"), "No"
@@ -2293,6 +2404,21 @@ Private Sub PutTableListRow(ByVal ws As Worksheet, ByVal rowNumber As Long, ByVa
     ws.Cells(rowNumber, 3).Value = tableNumber
 End Sub
 
+' アウトプット②の1明細を検証
+Private Sub AssertOutputTwoRow( _
+    ByVal ws As Worksheet, _
+    ByVal rowNumber As Long, _
+    ByVal startColumn As Long, _
+    ByVal expectedTableId As String, _
+    ByVal expectedTableName As String, _
+    ByVal expectedTableNumber As String)
+
+    AssertCellValue ws.Cells(rowNumber, startColumn), CStr(rowNumber - 3)
+    AssertCellValue ws.Cells(rowNumber, startColumn + 2), expectedTableId
+    AssertCellValue ws.Cells(rowNumber, startColumn + 18), expectedTableName
+    AssertCellValue ws.Cells(rowNumber, startColumn + 43), expectedTableNumber
+End Sub
+
 ' SQL解析行の変換結果と変換内容を検証
 Private Sub AssertAnalyzeRow(ByVal ws As Worksheet, ByVal rowNumber As Long, ByVal expectedSql As String, ByVal expectedReplacements As Variant)
     Dim index As Long
@@ -2663,6 +2789,14 @@ Private Sub AssertCellFont(ByVal cell As Range, ByVal expectedName As String, By
     If CDbl(cell.Font.Size) <> expectedSize Then
         Fail cell.Worksheet.Name & "!" & cell.Address(False, False) & _
             " font size expected=[" & CStr(expectedSize) & "] actual=[" & CStr(cell.Font.Size) & "]"
+    End If
+End Sub
+
+' セルが太字でないことを検証
+Private Sub AssertCellNotBold(ByVal cell As Range)
+    If CBool(cell.Font.Bold) Then
+        Fail cell.Worksheet.Name & "!" & cell.Address(False, False) & _
+            " should not be bold."
     End If
 End Sub
 

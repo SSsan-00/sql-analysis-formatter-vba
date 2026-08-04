@@ -279,7 +279,69 @@ public sealed class TableUsageTests
     }
 
     [TestMethod]
-    public void Build_UnsupportedLaterStatementSuppressesAllTableUsage()
+    public void Build_UnsupportedLaterStatementPreservesEarlierSupportedTableUsage()
+    {
+        const string sql = """
+            SELECT u.id FROM dbo.users AS u;
+            CREATE INDEX IX_ignored_id ON dbo.ignored_table(id);
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        CollectionAssert.AreEqual(new[] { "users" }, plan.InputTableIds.ToArray());
+        Assert.IsEmpty(plan.OutputTableIds);
+    }
+
+    [TestMethod]
+    public void Build_UnsupportedEarlierStatementPreservesLaterSupportedTableUsage()
+    {
+        const string sql = """
+            CREATE INDEX IX_ignored_id ON dbo.ignored_table(id);
+            SELECT u.id FROM dbo.users AS u;
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsTrue(plan.IsFallback);
+        CollectionAssert.AreEqual(new[] { "users" }, plan.InputTableIds.ToArray());
+        Assert.IsEmpty(plan.OutputTableIds);
+    }
+
+    [TestMethod]
+    public void Build_UnsupportedMiddleStatementPreservesSupportedUsageOnBothSides()
+    {
+        const string sql = """
+            SELECT * FROM dbo.users;
+            CREATE INDEX IX_ignored_id ON dbo.ignored_table(id);
+            INSERT INTO dbo.audit_log(user_id)
+            SELECT id FROM dbo.active_users;
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        CollectionAssert.AreEqual(
+            new[] { "users", "active_users" },
+            plan.InputTableIds.ToArray());
+        CollectionAssert.AreEqual(new[] { "audit_log" }, plan.OutputTableIds.ToArray());
+    }
+
+    [TestMethod]
+    public void Build_OnlyUnsupportedStatementsHasNoTableUsage()
+    {
+        const string sql = """
+            CREATE INDEX IX_ignored_id ON dbo.ignored_table(id);
+            CREATE TABLE dbo.created_table(id int);
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsTrue(plan.IsFallback);
+        Assert.IsEmpty(plan.InputTableIds);
+        Assert.IsEmpty(plan.OutputTableIds);
+    }
+
+    [TestMethod]
+    public void Build_SelectAndDefaultValues_ExcludesDefaultValuesTarget()
     {
         const string sql = """
             SELECT u.id FROM dbo.users AS u;
@@ -288,14 +350,59 @@ public sealed class TableUsageTests
 
         var plan = OutputSheetPlanBuilder.Build(sql, []);
 
-        Assert.IsEmpty(plan.InputTableIds);
+        CollectionAssert.AreEqual(new[] { "users" }, plan.InputTableIds.ToArray());
         Assert.IsEmpty(plan.OutputTableIds);
     }
 
     [TestMethod]
-    public void Build_FallbackHasNoTableUsage()
+    public void Build_SupportedStatementsDeduplicateTablesAcrossStatements()
     {
-        var plan = OutputSheetPlanBuilder.Build("SELECT FROM", []);
+        const string sql = """
+            SELECT * FROM dbo.users;
+            SELECT * FROM dbo.USERS;
+            INSERT INTO dbo.audit_log(user_id) SELECT id FROM dbo.users;
+            INSERT INTO dbo.AUDIT_LOG(user_id) SELECT id FROM dbo.users;
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        CollectionAssert.AreEqual(new[] { "users" }, plan.InputTableIds.ToArray());
+        CollectionAssert.AreEqual(new[] { "audit_log" }, plan.OutputTableIds.ToArray());
+    }
+
+    [TestMethod]
+    public void Build_PartialSuccessPreservesInputAndOutputFirstOccurrenceOrder()
+    {
+        const string sql = """
+            INSERT INTO dbo.output_second(id)
+            SELECT id FROM dbo.input_second;
+            CREATE INDEX IX_ignored_id ON dbo.ignored_table(id);
+            SELECT f.id
+            FROM dbo.input_first AS f
+            JOIN dbo.input_third AS t ON t.id = f.id;
+            INSERT INTO dbo.output_first(id)
+            SELECT id FROM dbo.input_fourth;
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        CollectionAssert.AreEqual(
+            new[] { "input_second", "input_first", "input_third", "input_fourth" },
+            plan.InputTableIds.ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "output_second", "output_first" },
+            plan.OutputTableIds.ToArray());
+    }
+
+    [TestMethod]
+    public void Build_SyntaxErrorAnywhereSuppressesAllTableUsage()
+    {
+        const string sql = """
+            SELECT * FROM dbo.users;
+            SELECT FROM dbo.broken;
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
 
         Assert.IsTrue(plan.IsFallback);
         Assert.IsEmpty(plan.InputTableIds);
