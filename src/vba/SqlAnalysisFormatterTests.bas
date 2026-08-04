@@ -15,6 +15,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
 
     SetupWorkbook_CreatesOutputSheet
     SetupWorkbook_CreatesOutputTwoLayout
+    SetupWorkbook_CreatesStableSqlActionButtons
     SetupWorkbook_TracksMissingNameFillColor
     CopyOutput_CopiesRenderedRange
     CopyOutputTwo_CopiesRenderedRange
@@ -42,9 +43,12 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_UsesStandaloneTableNameForSingleTable
     AnalyzeQueries_WritesUnsupportedQueryAsIs
     AnalyzeQueries_FramesOnlyTableBody
+    AnalyzeQueries_RestoresSqlActionButtonsAfterLargeInput
+    AnalyzeQueries_RestoresApplicationStateAfterOutputError
     ClearConfirmMessage_UsesAnalysisResultWording
     ClearData_ClearsOutputSheet
     ClearData_InitializesOutputTwoAndPreservesTableList
+    ClearData_RestoresSqlActionButtons
 
     If showMessage Then
         MsgBox "SqlAnalysisFormatter tests passed.", vbInformation
@@ -56,6 +60,160 @@ TestFail:
         MsgBox Err.Description, vbCritical
     End If
     Err.Raise Err.Number, Err.Source, Err.Description
+End Sub
+
+'@TestMethod("SetupWorkbook")
+Public Sub SetupWorkbook_CreatesStableSqlActionButtons()
+    Dim wsSql As Worksheet
+
+    SetupWorkbook
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+
+    AssertSqlActionButtons wsSql
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+Public Sub AnalyzeQueries_RestoresSqlActionButtonsAfterLargeInput()
+    Const SELECT_ITEM_COUNT As Long = 500
+
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim itemNumber As Long
+    Dim lastRow As Long
+    Dim testStage As String
+    Dim errorNumber As Long
+    Dim errorSource As String
+    Dim errorDescription As String
+    Dim previousScreenUpdating As Boolean
+    Dim previousEnableEvents As Boolean
+
+    On Error GoTo TestFail
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    testStage = "setup"
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    wsRef.Range("A2:D1000").ClearContents
+    wsSql.Range("A2:Z2000").ClearContents
+
+    testStage = "prepare large SQL"
+    wsSql.Cells(2, COL_SQL).Value = "SELECT"
+    For itemNumber = 1 To SELECT_ITEM_COUNT
+        wsSql.Cells(itemNumber + 2, COL_SQL).Value = _
+            IIf(itemNumber = 1, "    ", "    , ") & _
+            "tb1.col" & CStr(itemNumber) & " AS item" & CStr(itemNumber)
+    Next itemNumber
+    lastRow = SELECT_ITEM_COUNT + 3
+    wsSql.Cells(lastRow, COL_SQL).Value = "FROM users AS tb1;"
+
+    testStage = "simulate hidden buttons"
+    wsSql.Shapes("btnAnalyzeQueries").Delete
+    wsSql.Columns("E:F").Hidden = True
+    ThisWorkbook.DisplayDrawingObjects = xlHide
+
+    testStage = "analyze large SQL"
+    previousScreenUpdating = Application.ScreenUpdating
+    previousEnableEvents = Application.EnableEvents
+    AnalyzeQueries False
+
+    testStage = "verify completed analysis"
+    AssertCellValue wsSql.Cells(lastRow, COL_RESULT), "FROM users AS tb1;"
+    If Application.ScreenUpdating <> previousScreenUpdating Then
+        Fail "AnalyzeQueries should restore ScreenUpdating after a large input."
+    End If
+    If Application.EnableEvents <> previousEnableEvents Then
+        Fail "AnalyzeQueries should restore EnableEvents after a large input."
+    End If
+    testStage = "verify repaired buttons"
+    AssertSqlActionButtons wsSql
+    wsSql.Columns("E:F").Hidden = False
+    Exit Sub
+
+TestFail:
+    errorNumber = Err.Number
+    errorSource = Err.Source
+    errorDescription = Err.Description
+    On Error Resume Next
+    wsSql.Columns("E:F").Hidden = False
+    On Error GoTo 0
+    Err.Raise errorNumber, errorSource, testStage & ": " & errorDescription
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+Public Sub AnalyzeQueries_RestoresApplicationStateAfterOutputError()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim previousScreenUpdating As Boolean
+    Dim previousEnableEvents As Boolean
+    Dim previousStatusBar As Variant
+    Dim analyzeErrorNumber As Long
+    Dim errorNumber As Long
+    Dim errorSource As String
+    Dim errorDescription As String
+
+    On Error GoTo TestFail
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+    wsRef.Range("A2:D20").ClearContents
+    wsSql.Range("A2:Z20").ClearContents
+    wsSql.Cells(2, COL_SQL).Value = "SELECT 1;"
+    wsSql.Shapes("btnAnalyzeQueries").Delete
+    ThisWorkbook.DisplayDrawingObjects = xlHide
+    wsOutput.Protect
+
+    previousScreenUpdating = Application.ScreenUpdating
+    previousEnableEvents = Application.EnableEvents
+    previousStatusBar = Application.StatusBar
+    On Error Resume Next
+    AnalyzeQueries False
+    analyzeErrorNumber = Err.Number
+    Err.Clear
+    On Error GoTo TestFail
+    wsOutput.Unprotect
+
+    If analyzeErrorNumber = 0 Then
+        Fail "AnalyzeQueries should report a protected output sheet."
+    End If
+    If Application.ScreenUpdating <> previousScreenUpdating Then
+        Fail "AnalyzeQueries should restore ScreenUpdating after an error."
+    End If
+    If Application.EnableEvents <> previousEnableEvents Then
+        Fail "AnalyzeQueries should restore EnableEvents after an error."
+    End If
+    If StrComp(CStr(Application.StatusBar), CStr(previousStatusBar), vbTextCompare) <> 0 Then
+        Fail "AnalyzeQueries should restore StatusBar after an error. expected=[" & _
+            CStr(previousStatusBar) & "] actual=[" & CStr(Application.StatusBar) & "]"
+    End If
+    AssertSqlActionButtons wsSql
+    Exit Sub
+
+TestFail:
+    errorNumber = Err.Number
+    errorSource = Err.Source
+    errorDescription = Err.Description
+    On Error Resume Next
+    If Not wsOutput Is Nothing Then wsOutput.Unprotect
+    On Error GoTo 0
+    Err.Raise errorNumber, errorSource, errorDescription
+End Sub
+
+'@TestMethod("ClearData")
+Public Sub ClearData_RestoresSqlActionButtons()
+    Dim wsSql As Worksheet
+
+    SetupWorkbook
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    wsSql.Shapes("btnClearData").Delete
+    ThisWorkbook.DisplayDrawingObjects = xlHide
+
+    ClearData False
+
+    AssertSqlActionButtons wsSql
 End Sub
 
 '@TestMethod("AnalyzeQueries")
@@ -2370,6 +2528,54 @@ Private Sub AssertOutputTwoCopyButton(ByVal wsOutput As Worksheet)
         End If
     Next copyButton
     Fail "Output-two copy button was not found."
+End Sub
+
+' SQL解析シートの操作ボタンが表示可能な固定配置であることを検証
+Private Sub AssertSqlActionButtons(ByVal wsSql As Worksheet)
+    If ThisWorkbook.DisplayDrawingObjects <> xlDisplayShapes Then
+        Fail "Workbook drawing objects should be displayed."
+    End If
+
+    AssertSqlActionButton _
+        wsSql, "btnAnalyzeQueries", "AnalyzeQueries", wsSql.Columns("E").Left
+    AssertSqlActionButton _
+        wsSql, "btnClearData", "ClearData", wsSql.Columns("E").Left + 82
+End Sub
+
+' 指定したSQL解析シートボタンの表示、配置、操作を検証
+Private Sub AssertSqlActionButton( _
+    ByVal wsSql As Worksheet, _
+    ByVal buttonName As String, _
+    ByVal macroName As String, _
+    ByVal expectedLeft As Double)
+
+    Dim actionButton As Shape
+
+    On Error Resume Next
+    Set actionButton = wsSql.Shapes(buttonName)
+    On Error GoTo 0
+    If actionButton Is Nothing Then
+        Fail "SQL action button was not found: " & buttonName
+    End If
+    If actionButton.Visible <> msoTrue Then
+        Fail buttonName & " should be visible."
+    End If
+    If actionButton.Placement <> xlFreeFloating Then
+        Fail buttonName & " should use free-floating placement."
+    End If
+    If Abs(CDbl(actionButton.Top) - (CDbl(wsSql.Rows(1).Top) + 2)) > 0.1 Then
+        Fail buttonName & " top position is invalid."
+    End If
+    If Abs(CDbl(actionButton.Left) - expectedLeft) > 0.1 Then
+        Fail buttonName & " left position is invalid."
+    End If
+    If Abs(CDbl(actionButton.Width) - 72) > 0.1 Or _
+        Abs(CDbl(actionButton.Height) - 24) > 0.1 Then
+        Fail buttonName & " size is invalid."
+    End If
+    If Right$(CStr(actionButton.OnAction), Len(macroName)) <> macroName Then
+        Fail buttonName & " action is invalid."
+    End If
 End Sub
 
 ' フォールバックSQLの行と原因を検証

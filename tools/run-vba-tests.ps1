@@ -69,6 +69,7 @@ try {
     $testMacros = @(
         'SetupWorkbook_CreatesOutputSheet',
         'SetupWorkbook_CreatesOutputTwoLayout',
+        'SetupWorkbook_CreatesStableSqlActionButtons',
         'SetupWorkbook_TracksMissingNameFillColor',
         'CopyOutput_CopiesRenderedRange',
         'CopyOutputTwo_CopiesRenderedRange',
@@ -96,9 +97,12 @@ try {
         'AnalyzeQueries_UsesStandaloneTableNameForSingleTable',
         'AnalyzeQueries_WritesUnsupportedQueryAsIs',
         'AnalyzeQueries_FramesOnlyTableBody',
+        'AnalyzeQueries_RestoresSqlActionButtonsAfterLargeInput',
+        'AnalyzeQueries_RestoresApplicationStateAfterOutputError',
         'ClearConfirmMessage_UsesAnalysisResultWording',
         'ClearData_ClearsOutputSheet',
-        'ClearData_InitializesOutputTwoAndPreservesTableList'
+        'ClearData_InitializesOutputTwoAndPreservesTableList',
+        'ClearData_RestoresSqlActionButtons'
     )
     if ($TestName.Count -gt 0) {
         $testMacros = @($testMacros | Where-Object { $_ -in $TestName })

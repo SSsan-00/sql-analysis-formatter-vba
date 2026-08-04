@@ -15,6 +15,7 @@
 - `docs/PROVISIONAL_OUTPUT_CASES.md`: 実装前・実装後の推測期待値を管理するユーザーレビュー待ちケース
 - `tools/Set-ManualOutputCase.ps1`: 指定ケースをマクロブックへ投入して期待値作成を開始するスクリプト
 - `tools/run-output-golden-tests.ps1`: 実 Excel による値・書式回帰テスト
+- `tools/benchmark-large-sql.ps1`: 大規模SQLのparser時間、Excel解析時間、ボタン状態を測るベンチマーク
 
 ## テスト
 
@@ -46,6 +47,15 @@ powershell -ExecutionPolicy Bypass -File tools/run-vba-tests.ps1 -ParserExePath 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/run-output-golden-tests.ps1 -MeasurePerformance
 ```
+
+大規模入力の性能を確認する場合は、取得項目数と変換定義数を指定して専用ベンチマークを実行します。通常は作業ツリーのVBAを一時ブックへ取り込みます。`-UseEmbeddedMainModule`を付けると、保存済みブックのVBAを比較対象にできます。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/benchmark-large-sql.ps1 -ItemCount 2000 -MappingCount 200
+powershell -ExecutionPolicy Bypass -File tools/benchmark-large-sql.ps1 -ItemCount 2000 -MappingCount 200 -UseEmbeddedMainModule
+```
+
+結果では解析行数に加え、解析前後で`btnAnalyzeQueries`と`btnClearData`が存在し、表示中かつ`xlFreeFloating`の配置を保つことも確認します。
 
 書式は`SqlAnalysisFormatterGoldenTests.bas`によりExcel内部で比較します。最初のケースでは意図的な書式差分を検知できることも自己診断します。
 機能追加は、失敗するテストを先に追加し、最小実装で成功させ、全回帰テストを維持したまま整理する TDD サイクルで進めます。

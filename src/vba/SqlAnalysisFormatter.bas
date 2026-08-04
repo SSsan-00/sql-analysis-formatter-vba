@@ -45,7 +45,7 @@ Public Sub SetupWorkbook()
     ApplyOutputSheetLayout wsOutput
     EnsureOutputTwoStructure wsOutputTwo
     ApplyTableListLayout wsTableList
-    InstallButtons wsSql
+    EnsureSqlActionButtons wsSql
     InstallOutputButton wsOutput, "btnCopyOutput", "CopyOutput", OUTPUT_LAST_COLUMN
     InstallOutputButton wsOutputTwo, "btnCopyOutputTwo", "CopyOutputTwo", OUTPUT_TWO_LAST_COLUMN
 End Sub
@@ -61,6 +61,8 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     Dim standaloneMap As Object
     Dim qualifiedParserMap As Object
     Dim standaloneParserMap As Object
+    Dim qualifiedRegexes As Object
+    Dim standaloneRegexes As Object
     Dim qualifiedKeys As Variant
     Dim standaloneKeys As Variant
     Dim lastRow As Long
@@ -79,57 +81,120 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     Dim outputTableIds As Collection
     Dim tableMaster As Object
     Dim duplicateTableIds As Collection
+    Dim sqlValues As Variant
+    Dim convertedValues() As Variant
+    Dim convertedLines() As String
+    Dim parserLines() As String
+    Dim inputRowCount As Long
+    Dim inputRowIndex As Long
+    Dim nonEmptyLineCount As Long
+    Dim maxReplacementCount As Long
+    Dim previousScreenUpdating As Boolean
+    Dim previousEnableEvents As Boolean
+    Dim previousStatusBar As Variant
+    Dim applicationStateCaptured As Boolean
+    Dim errorNumber As Long
+    Dim errorSource As String
+    Dim errorDescription As String
+    Dim analysisStage As String
+    Dim analysisOutputReset As Boolean
 
+    On Error GoTo AnalyzeFail
+
+    previousScreenUpdating = Application.ScreenUpdating
+    previousEnableEvents = Application.EnableEvents
+    previousStatusBar = Application.StatusBar
+    applicationStateCaptured = True
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    Application.StatusBar = "SQL analysis is running..."
+
+    analysisStage = "resolve workbook sheets"
     Set wsRef = GetReferenceSheet()
     Set wsSql = GetSqlSheet()
+    analysisStage = "restore SQL action buttons"
+    EnsureSqlActionButtons wsSql
     Set wsOutput = GetOutputSheet(False)
     Set wsOutputTwo = GetOutputTwoSheet(False)
-    Set wsTableList = GetTableListSheet()
+    Set wsTableList = GetTableListSheet(False)
     Set qualifiedMap = CreateTextDictionary()
     Set standaloneMap = CreateTextDictionary()
     Set qualifiedParserMap = CreateTextDictionary()
     Set standaloneParserMap = CreateTextDictionary()
+    Set qualifiedRegexes = CreateTextDictionary()
+    Set standaloneRegexes = CreateTextDictionary()
     Set replacementValuesByRow = CreateTextDictionary()
     Set queryLineRows = New Collection
     Set qualifications = New Collection
     Set inputTableIds = New Collection
     Set outputTableIds = New Collection
+    analysisStage = "load table definitions"
     LoadTableMaster wsTableList, tableMaster, duplicateTableIds
 
+    analysisStage = "load conversion definitions"
     LoadMappings wsRef, qualifiedMap, standaloneMap, qualifiedParserMap, standaloneParserMap
     qualifiedKeys = SortedKeysByLengthDesc(qualifiedMap)
     standaloneKeys = SortedKeysByLengthDesc(standaloneMap)
 
+    analysisStage = "prepare output sheets"
     lastRow = LastUsedRowInColumn(wsSql, COL_SQL)
     ClearAnalyzeOutput wsSql, lastRow
     ClearOutputSheet wsOutput, False
-    ClearOutputTwoSheet wsOutputTwo
+    analysisOutputReset = True
 
-    For rowNumber = 2 To lastRow
-        sourceText = CStr(wsSql.Cells(rowNumber, COL_SQL).Value)
-        If Len(sourceText) > 0 Then
-            Set replacementValues = CreateTextDictionary()
-            convertedText = ApplyMappings(sourceText, qualifiedMap, qualifiedKeys, standaloneMap, standaloneKeys, replacementValues)
-            parserText = ApplyMappings( _
-                sourceText, qualifiedParserMap, qualifiedKeys, _
-                standaloneParserMap, standaloneKeys, Nothing, False)
-            SetOutputCellText wsSql.Cells(rowNumber, COL_RESULT), convertedText
-            Set replacementValuesByRow(CStr(rowNumber)) = replacementValues
-            If Len(convertedQueryText) > 0 Then
-                convertedQueryText = convertedQueryText & vbCrLf
+    analysisStage = "convert SQL input"
+    If lastRow >= 2 Then
+        inputRowCount = lastRow - 1
+        sqlValues = wsSql.Range( _
+            wsSql.Cells(2, COL_SQL), _
+            wsSql.Cells(lastRow, COL_SQL)).Value2
+        ReDim convertedValues(1 To inputRowCount, 1 To 1)
+        ReDim convertedLines(0 To inputRowCount - 1)
+        ReDim parserLines(0 To inputRowCount - 1)
+
+        For inputRowIndex = 1 To inputRowCount
+            rowNumber = inputRowIndex + 1
+            If inputRowCount = 1 Then
+                sourceText = CStr(sqlValues)
+            Else
+                sourceText = CStr(sqlValues(inputRowIndex, 1))
             End If
-            convertedQueryText = convertedQueryText & convertedText
-            If Len(parserQueryText) > 0 Then
-                parserQueryText = parserQueryText & vbCrLf
+            If Len(sourceText) > 0 Then
+                Set replacementValues = CreateTextDictionary()
+                convertedText = ApplyMappings( _
+                    sourceText, qualifiedMap, qualifiedKeys, standaloneMap, standaloneKeys, _
+                    replacementValues, True, qualifiedRegexes, standaloneRegexes)
+                parserText = ApplyMappings( _
+                    sourceText, qualifiedParserMap, qualifiedKeys, _
+                    standaloneParserMap, standaloneKeys, Nothing, False, _
+                    qualifiedRegexes, standaloneRegexes)
+                convertedValues(inputRowIndex, 1) = OutputTextValue(convertedText)
+                Set replacementValuesByRow(CStr(rowNumber)) = replacementValues
+                convertedLines(nonEmptyLineCount) = convertedText
+                parserLines(nonEmptyLineCount) = parserText
+                nonEmptyLineCount = nonEmptyLineCount + 1
+                AddQueryLineRows queryLineRows, rowNumber, parserText
             End If
-            parserQueryText = parserQueryText & parserText
-            AddQueryLineRows queryLineRows, rowNumber, parserText
+        Next inputRowIndex
+
+        With wsSql.Range(wsSql.Cells(2, COL_RESULT), wsSql.Cells(lastRow, COL_RESULT))
+            .NumberFormat = "@"
+            .Value = convertedValues
+        End With
+
+        If nonEmptyLineCount > 0 Then
+            ReDim Preserve convertedLines(0 To nonEmptyLineCount - 1)
+            ReDim Preserve parserLines(0 To nonEmptyLineCount - 1)
+            convertedQueryText = Join(convertedLines, vbCrLf)
+            parserQueryText = Join(parserLines, vbCrLf)
         End If
-    Next rowNumber
+    End If
 
+    analysisStage = "parse SQL and render output"
     If Len(convertedQueryText) > 0 Then
         If Not TryWriteExternalOutputPlan( _
             wsOutput, wsRef, parserQueryText, qualifications, inputTableIds, outputTableIds, fallbackReason) Then
+            ClearOutputTwoSheet wsOutputTwo
             WriteFallbackOutput wsOutput, convertedQueryText, fallbackReason
         Else
             ApplyReplacementQualifications _
@@ -137,25 +202,52 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
             RenderOutputTwo wsOutputTwo, inputTableIds, outputTableIds, tableMaster
         End If
     Else
+        ClearOutputTwoSheet wsOutputTwo
         ApplyOutputSheetLayout wsOutput
     End If
 
-    For rowNumber = 2 To lastRow
-        If replacementValuesByRow.Exists(CStr(rowNumber)) Then
-            Set replacementValues = replacementValuesByRow(CStr(rowNumber))
-            WriteReplacementValues wsSql, rowNumber, replacementValues
-        End If
-    Next rowNumber
+    analysisStage = "write SQL analysis results"
+    WriteReplacementValuesBatch _
+        wsSql, lastRow, replacementValuesByRow, maxReplacementCount
 
     wsSql.Range(wsSql.Cells(1, COL_RESULT), wsSql.Cells(MaxLong(lastRow, 1), COL_RESULT)).WrapText = False
-    SetReplacementColumnsWrapText wsSql, False, LastUsedColumn(wsSql), MaxLong(lastRow, 1)
+    SetReplacementColumnsWrapText _
+        wsSql, False, _
+        MaxLong(26, COL_REPLACEMENT + maxReplacementCount - 1), _
+        MaxLong(lastRow, 1)
+    analysisStage = "finalize SQL analysis sheet"
+    RestoreFindSearchOrderByRows wsSql
+    EnsureSqlActionButtons wsSql
+
+AnalyzeCleanUp:
+    On Error Resume Next
+    If errorNumber <> 0 And analysisOutputReset Then
+        If Not wsOutputTwo Is Nothing Then ClearOutputTwoSheet wsOutputTwo
+    End If
+    If Not wsSql Is Nothing Then EnsureSqlActionButtons wsSql
+    If applicationStateCaptured Then
+        Application.StatusBar = previousStatusBar
+        Application.EnableEvents = previousEnableEvents
+        Application.ScreenUpdating = previousScreenUpdating
+    End If
+    On Error GoTo 0
+
+    If errorNumber <> 0 Then
+        Err.Raise errorNumber, errorSource, errorDescription
+    End If
     If showMessage And duplicateTableIds.Count > 0 Then
         MsgBox DuplicateTableWarningMessage(duplicateTableIds), vbExclamation
     End If
     If showMessage Then
         MsgBox AnalyzeDoneMessage(), vbInformation
     End If
-    RestoreFindSearchOrderByRows wsSql
+    Exit Sub
+
+AnalyzeFail:
+    errorNumber = Err.Number
+    errorSource = Err.Source
+    errorDescription = analysisStage & ": " & Err.Description
+    Resume AnalyzeCleanUp
 End Sub
 
 ' 確認後、入力シートの2行目以降とアウトプットシートをクリア
@@ -165,12 +257,17 @@ Public Sub ClearData(Optional ByVal showMessage As Boolean = True)
     Dim wsOutput As Worksheet
     Dim wsOutputTwo As Worksheet
     Dim wsTableList As Worksheet
+    Dim errorNumber As Long
+    Dim errorSource As String
+    Dim errorDescription As String
 
     If showMessage Then
         If MsgBox(ClearConfirmMessage(), vbQuestion + vbYesNo + vbDefaultButton2, ConfirmTitle()) <> vbYes Then
             Exit Sub
         End If
     End If
+
+    On Error GoTo ClearFail
 
     Set wsRef = GetReferenceSheet()
     Set wsSql = GetSqlSheet()
@@ -188,10 +285,21 @@ Public Sub ClearData(Optional ByVal showMessage As Boolean = True)
     ResetSheetViewPosition wsOutput
     ResetSheetViewPosition wsOutputTwo
     ResetSheetViewPosition wsTableList
+    EnsureSqlActionButtons wsSql
+    RestoreFindSearchOrderByRows wsSql
     If showMessage Then
         MsgBox ClearDoneMessage(), vbInformation
     End If
-    RestoreFindSearchOrderByRows wsSql
+    Exit Sub
+
+ClearFail:
+    errorNumber = Err.Number
+    errorSource = Err.Source
+    errorDescription = Err.Description
+    On Error Resume Next
+    If Not wsSql Is Nothing Then EnsureSqlActionButtons wsSql
+    On Error GoTo 0
+    Err.Raise errorNumber, errorSource, errorDescription
 End Sub
 
 ' 指定シートの選択セルとスクロールをA1へ戻し、元のシート表示を維持
@@ -242,12 +350,18 @@ Private Sub LoadMappings( _
     Dim fieldId As String
     Dim fieldName As String
     Dim parserFieldId As String
+    Dim mappingValues As Variant
 
     lastRow = LastUsedRow(wsRef)
+    If lastRow < 2 Then Exit Sub
+
+    mappingValues = wsRef.Range( _
+        wsRef.Cells(2, COL_TABLE_ID), _
+        wsRef.Cells(lastRow, COL_FIELD_NAME)).Value2
     For rowNumber = 2 To lastRow
-        tableId = NormalizeKey(wsRef.Cells(rowNumber, COL_TABLE_ID).Value)
-        fieldId = NormalizeKey(wsRef.Cells(rowNumber, COL_FIELD_ID).Value)
-        fieldName = NormalizeName(wsRef.Cells(rowNumber, COL_FIELD_NAME).Value)
+        tableId = NormalizeKey(mappingValues(rowNumber - 1, COL_TABLE_ID))
+        fieldId = NormalizeKey(mappingValues(rowNumber - 1, COL_FIELD_ID))
+        fieldName = NormalizeName(mappingValues(rowNumber - 1, COL_FIELD_NAME))
 
         If Len(fieldId) > 0 And IsUsableJapaneseName(fieldName) Then
             parserFieldId = ParserFieldIdentifier(rowNumber)
@@ -270,15 +384,19 @@ Private Function ApplyMappings( _
     ByVal standaloneMap As Object, _
     ByVal standaloneKeys As Variant, _
     ByVal replacementValues As Object, _
-    Optional ByVal trackReplacements As Boolean = True) As String
+    Optional ByVal trackReplacements As Boolean = True, _
+    Optional ByVal qualifiedRegexes As Object = Nothing, _
+    Optional ByVal standaloneRegexes As Object = Nothing) As String
     Dim resultText As String
 
     resultText = sourceText
 
     resultText = ApplyMappingSet( _
-        resultText, qualifiedMap, qualifiedKeys, replacementValues, False, trackReplacements)
+        resultText, qualifiedMap, qualifiedKeys, replacementValues, False, _
+        trackReplacements, qualifiedRegexes)
     resultText = ApplyMappingSet( _
-        resultText, standaloneMap, standaloneKeys, replacementValues, True, trackReplacements)
+        resultText, standaloneMap, standaloneKeys, replacementValues, True, _
+        trackReplacements, standaloneRegexes)
 
     ApplyMappings = resultText
 End Function
@@ -290,7 +408,8 @@ Private Function ApplyMappingSet( _
     ByVal sortedKeys As Variant, _
     ByVal replacementValues As Object, _
     ByVal standaloneMode As Boolean, _
-    ByVal trackReplacements As Boolean) As String
+    ByVal trackReplacements As Boolean, _
+    ByVal regexes As Object) As String
     Dim resultText As String
     Dim key As Variant
     Dim searchText As String
@@ -309,7 +428,9 @@ Private Function ApplyMappingSet( _
         If InStr(1, resultText, searchText, vbBinaryCompare) > 0 Then
             replacementText = CStr(mapping(searchText))
             changeCount = 0
-            resultText = ReplaceIdentifier(resultText, searchText, replacementText, changeCount, firstMatchIndex, standaloneMode)
+            resultText = ReplaceIdentifier( _
+                resultText, searchText, replacementText, changeCount, firstMatchIndex, _
+                standaloneMode, regexes)
             If changeCount > 0 And trackReplacements Then
                 AddReplacementValue replacementValues, replacementText, firstMatchIndex
             End If
@@ -326,7 +447,8 @@ Private Function ReplaceIdentifier( _
     ByVal replacementText As String, _
     ByRef changeCount As Long, _
     ByRef firstMatchIndex As Long, _
-    ByVal standaloneMode As Boolean) As String
+    ByVal standaloneMode As Boolean, _
+    ByVal regexes As Object) As String
     Dim re As Object
     Dim matches As Object
     Dim matchItem As Object
@@ -336,14 +458,20 @@ Private Function ReplaceIdentifier( _
     Dim suffix As String
     Dim identifierStart As Long
 
-    Set re = CreateObject("VBScript.RegExp")
-    re.Global = True
-    re.IgnoreCase = False
+    If Not regexes Is Nothing Then
+        If regexes.Exists(searchText) Then Set re = regexes(searchText)
+    End If
+    If re Is Nothing Then
+        Set re = CreateObject("VBScript.RegExp")
+        re.Global = True
+        re.IgnoreCase = False
     ' 識別子の一部一致を避けるため、前後を英数字とアンダースコア以外に限定
     If standaloneMode Then
         re.Pattern = "(^|[^A-Za-z0-9_.])" & EscapeRegexLiteral(searchText) & "([^A-Za-z0-9_.]|$)"
     Else
         re.Pattern = "(^|[^A-Za-z0-9_])" & EscapeRegexLiteral(searchText) & "([^A-Za-z0-9_]|$)"
+        End If
+        If Not regexes Is Nothing Then Set regexes(searchText) = re
     End If
 
     Set matches = re.Execute(sourceText)
@@ -545,11 +673,11 @@ Private Function GetOutputTwoSheet(Optional ByVal applyLayout As Boolean = True)
 End Function
 
 ' テーブル一覧を取得
-Private Function GetTableListSheet() As Worksheet
+Private Function GetTableListSheet(Optional ByVal applyLayout As Boolean = True) As Worksheet
     Dim ws As Worksheet
 
     Set ws = ResolveOrCreateNamedSheet(TableListSheetName())
-    ApplyTableListLayout ws
+    If applyLayout Then ApplyTableListLayout ws
     Set GetTableListSheet = ws
 End Function
 
@@ -558,8 +686,8 @@ Private Sub ApplyOutputSheetLayout(ByVal ws As Worksheet)
     Dim lastRow As Long
 
     lastRow = LastOutputRow(ws)
-    ApplyOutputSheetFont ws, lastRow
-    ApplyOutputSheetDimensions ws, lastRow
+    ApplyOutputColumnFont ws, OUTPUT_LAST_COLUMN
+    ApplyOutputSheetDimensions ws, lastRow, OUTPUT_LAST_COLUMN, True, True
     ApplyOutputSheetView ws
 End Sub
 
@@ -620,22 +748,61 @@ Private Sub ApplyOutputSheetFont( _
 End Sub
 
 ' アウトプットシートの列幅、行高、文字配置を設定
+' Parser value columns need wrapping disabled after multiline text is written.
+Private Sub ApplyOutputValueLayout( _
+    ByVal ws As Worksheet, _
+    ByVal lastRow As Long, _
+    ByVal usedOutputColumns As Object)
+
+    Dim usedColumn As Variant
+
+    lastRow = MaxLong(lastRow, 1)
+    For Each usedColumn In usedOutputColumns.Items
+        With ws.Range( _
+            ws.Cells(1, CLng(usedColumn)), _
+            ws.Cells(lastRow, CLng(usedColumn)))
+            .WrapText = False
+            .ShrinkToFit = False
+        End With
+    Next usedColumn
+End Sub
+
+' Setup and Clear establish defaults for cells that do not yet contain output.
+Private Sub ApplyOutputColumnFont( _
+    ByVal ws As Worksheet, _
+    ByVal lastColumn As Long)
+
+    With ws.Range(ws.Columns(1), ws.Columns(lastColumn)).Font
+        .Name = OutputFontName()
+        .Size = OutputFontSize()
+    End With
+End Sub
+
 Private Sub ApplyOutputSheetDimensions( _
     ByVal ws As Worksheet, _
     ByVal lastRow As Long, _
-    Optional ByVal lastColumn As Long = OUTPUT_LAST_COLUMN)
+    Optional ByVal lastColumn As Long = OUTPUT_LAST_COLUMN, _
+    Optional ByVal applyTextLayout As Boolean = True, _
+    Optional ByVal resetEntireColumns As Boolean = False)
     Dim layoutLastRow As Long
     Dim outputColumns As Range
 
     layoutLastRow = MaxLong(lastRow, 1)
     Set outputColumns = ws.Range(ws.Columns(1), ws.Columns(lastColumn))
-    With outputColumns
-        .ColumnWidth = OUTPUT_COLUMN_WIDTH
-        .WrapText = False
-        .ShrinkToFit = False
-        .Font.Name = OutputFontName()
-        .Font.Size = OutputFontSize()
-    End With
+    outputColumns.ColumnWidth = OUTPUT_COLUMN_WIDTH
+    If applyTextLayout Then
+        If resetEntireColumns Then
+            With outputColumns
+                .WrapText = False
+                .ShrinkToFit = False
+            End With
+        Else
+            With ws.Range(ws.Cells(1, 1), ws.Cells(layoutLastRow, lastColumn))
+                .WrapText = False
+                .ShrinkToFit = False
+            End With
+        End If
+    End If
     ws.Range(ws.Rows(1), ws.Rows(layoutLastRow)).RowHeight = OUTPUT_ROW_HEIGHT
 End Sub
 
@@ -756,12 +923,19 @@ Private Sub ApplyReferenceHeader(ByVal ws As Worksheet)
 End Sub
 
 ' アウトプット②の表示と基本書式を適用
-Private Sub ApplyOutputTwoSheetLayout(ByVal ws As Worksheet)
+Private Sub ApplyOutputTwoSheetLayout( _
+    ByVal ws As Worksheet, _
+    Optional ByVal resetEntireColumns As Boolean = True)
     Dim lastRow As Long
 
     lastRow = LastOutputRow(ws, OUTPUT_TWO_LAST_COLUMN)
-    ApplyOutputSheetFont ws, lastRow, OUTPUT_TWO_LAST_COLUMN
-    ApplyOutputSheetDimensions ws, lastRow, OUTPUT_TWO_LAST_COLUMN
+    If resetEntireColumns Then
+        ApplyOutputColumnFont ws, OUTPUT_TWO_LAST_COLUMN
+    Else
+        ApplyOutputSheetFont ws, lastRow, OUTPUT_TWO_LAST_COLUMN
+    End If
+    ApplyOutputSheetDimensions _
+        ws, lastRow, OUTPUT_TWO_LAST_COLUMN, True, resetEntireColumns
     ApplyOutputSheetView ws
 End Sub
 
@@ -833,31 +1007,56 @@ Private Sub RestoreHeaders(ByVal wsRef As Worksheet, ByVal wsSql As Worksheet)
 End Sub
 
 ' SQL解析シートへ解析ボタンとクリアボタンを配置
-Private Sub InstallButtons(ByVal ws As Worksheet)
+Private Sub EnsureSqlActionButtons(ByVal ws As Worksheet)
     Dim buttonTop As Double
     Dim buttonLeft As Double
-    Dim analyzeButton As Object
-    Dim clearButton As Object
 
-    DeleteShapeIfExists ws, "btnAnalyzeQueries"
-    DeleteShapeIfExists ws, "btnClearData"
-
+    ThisWorkbook.DisplayDrawingObjects = xlDisplayShapes
     buttonTop = ws.Rows(1).Top + 2
     buttonLeft = ws.Columns("E").Left
 
-    Set analyzeButton = ws.Buttons.Add(buttonLeft, buttonTop, 72, 24)
-    With analyzeButton
-        .Name = "btnAnalyzeQueries"
-        .Caption = AnalyzeButtonText()
-        .OnAction = "AnalyzeQueries"
-    End With
+    EnsureSqlActionButton _
+        ws, "btnAnalyzeQueries", AnalyzeButtonText(), "AnalyzeQueries", _
+        buttonLeft, buttonTop
+    EnsureSqlActionButton _
+        ws, "btnClearData", ClearButtonText(), "ClearData", _
+        buttonLeft + 82, buttonTop
+End Sub
 
-    Set clearButton = ws.Buttons.Add(buttonLeft + 82, buttonTop, 72, 24)
-    With clearButton
-        .Name = "btnClearData"
-        .Caption = ClearButtonText()
-        .OnAction = "ClearData"
+' SQL action buttons are repaired in place so a long-running analysis cannot leave them hidden or collapsed.
+Private Sub EnsureSqlActionButton( _
+    ByVal ws As Worksheet, _
+    ByVal buttonName As String, _
+    ByVal captionText As String, _
+    ByVal macroName As String, _
+    ByVal buttonLeft As Double, _
+    ByVal buttonTop As Double)
+
+    Dim actionButton As Object
+
+    On Error Resume Next
+    Set actionButton = ws.Buttons(buttonName)
+    On Error GoTo 0
+
+    If actionButton Is Nothing Then
+        DeleteShapeIfExists ws, buttonName
+        Set actionButton = ws.Buttons.Add(buttonLeft, buttonTop, 72, 24)
+        actionButton.Name = buttonName
+    End If
+
+    With actionButton
+        .Placement = xlFreeFloating
+        .Visible = True
+        .Caption = captionText
+        .OnAction = macroName
+        .Left = buttonLeft
+        .Top = buttonTop
+        .Width = 72
+        .Height = 24
     End With
+    On Error Resume Next
+    ws.Shapes(buttonName).ZOrder msoBringToFront
+    On Error GoTo 0
 End Sub
 
 ' 指定名の図形があれば削除
@@ -893,6 +1092,51 @@ Private Sub WriteReplacementValues(ByVal wsSql As Worksheet, ByVal rowNumber As 
     For index = LBound(keys) To UBound(keys)
         SetOutputCellText wsSql.Cells(rowNumber, COL_REPLACEMENT + index), CStr(keys(index))
     Next index
+End Sub
+
+' Write all replacement values in one Excel call; this avoids one COM call per populated cell.
+Private Sub WriteReplacementValuesBatch( _
+    ByVal wsSql As Worksheet, _
+    ByVal lastRow As Long, _
+    ByVal replacementValuesByRow As Object, _
+    ByRef maxReplacementCount As Long)
+
+    Dim replacementValues As Object
+    Dim replacementData() As Variant
+    Dim keys As Variant
+    Dim rowNumber As Long
+    Dim index As Long
+
+    maxReplacementCount = 0
+    For rowNumber = 2 To lastRow
+        If replacementValuesByRow.Exists(CStr(rowNumber)) Then
+            Set replacementValues = replacementValuesByRow(CStr(rowNumber))
+            maxReplacementCount = MaxLong(maxReplacementCount, replacementValues.Count)
+        End If
+    Next rowNumber
+
+    If maxReplacementCount = 0 Or lastRow < 2 Then Exit Sub
+
+    ReDim replacementData(1 To lastRow - 1, 1 To maxReplacementCount)
+    For rowNumber = 2 To lastRow
+        If replacementValuesByRow.Exists(CStr(rowNumber)) Then
+            Set replacementValues = replacementValuesByRow(CStr(rowNumber))
+            If replacementValues.Count > 0 Then
+                keys = SortedKeysByValueAsc(replacementValues)
+                For index = LBound(keys) To UBound(keys)
+                    replacementData(rowNumber - 1, index - LBound(keys) + 1) = _
+                        OutputTextValue(CStr(keys(index)))
+                Next index
+            End If
+        End If
+    Next rowNumber
+
+    With wsSql.Range( _
+        wsSql.Cells(2, COL_REPLACEMENT), _
+        wsSql.Cells(lastRow, COL_REPLACEMENT + maxReplacementCount - 1))
+        .NumberFormat = "@"
+        .Value = replacementData
+    End With
 End Sub
 
 ' parserへ渡す論理行番号とSQL解析シートの行番号を対応付け
@@ -1004,23 +1248,33 @@ Private Sub WriteMappingDefinitionFile(ByVal filePath As String, ByVal wsRef As 
     Dim mappingText As String
     Dim fieldName As String
     Dim parserFieldId As String
+    Dim mappingValues As Variant
+    Dim mappingLines() As String
 
-    mappingText = "SAF_MAPPINGS" & vbTab & "2"
     lastRow = LastUsedRow(wsRef)
+    ReDim mappingLines(0 To MaxLong(lastRow - 1, 0))
+    mappingLines(0) = "SAF_MAPPINGS" & vbTab & "2"
+
+    If lastRow >= 2 Then
+        mappingValues = wsRef.Range( _
+            wsRef.Cells(2, COL_TABLE_ID), _
+            wsRef.Cells(lastRow, COL_FIELD_NAME)).Value2
+    End If
     For rowNumber = 2 To lastRow
-        fieldName = NormalizeName(wsRef.Cells(rowNumber, COL_FIELD_NAME).Value)
+        fieldName = NormalizeName(mappingValues(rowNumber - 1, COL_FIELD_NAME))
         parserFieldId = ""
         If IsUsableJapaneseName(fieldName) Then
             parserFieldId = ParserFieldIdentifier(rowNumber)
         End If
-        mappingText = mappingText & vbCrLf & "M" & vbTab & _
-            EscapeProtocolField(CStr(wsRef.Cells(rowNumber, COL_TABLE_ID).Value)) & vbTab & _
-            EscapeProtocolField(CStr(wsRef.Cells(rowNumber, COL_TABLE_NAME).Value)) & vbTab & _
-            EscapeProtocolField(CStr(wsRef.Cells(rowNumber, COL_FIELD_ID).Value)) & vbTab & _
+        mappingLines(rowNumber - 1) = "M" & vbTab & _
+            EscapeProtocolField(CStr(mappingValues(rowNumber - 1, COL_TABLE_ID))) & vbTab & _
+            EscapeProtocolField(CStr(mappingValues(rowNumber - 1, COL_TABLE_NAME))) & vbTab & _
+            EscapeProtocolField(CStr(mappingValues(rowNumber - 1, COL_FIELD_ID))) & vbTab & _
             EscapeProtocolField(fieldName) & vbTab & _
             EscapeProtocolField(parserFieldId)
     Next rowNumber
 
+    mappingText = Join(mappingLines, vbCrLf)
     WriteUtf8TextFile filePath, mappingText
 End Sub
 
@@ -1059,6 +1313,8 @@ Private Function ApplyOutputPlan( _
     Dim parsedQualifications As Collection
     Dim parsedInputTableIds As Collection
     Dim parsedOutputTableIds As Collection
+    Dim usedOutputColumns As Object
+    Dim usedColumn As Variant
     Dim lineText As String
     Dim normalizedText As String
     Dim cellValue As String
@@ -1095,6 +1351,7 @@ Private Function ApplyOutputPlan( _
     Set parsedQualifications = New Collection
     Set parsedInputTableIds = New Collection
     Set parsedOutputTableIds = New Collection
+    Set usedOutputColumns = CreateTextDictionary()
     If rowCount > 0 Then
         ReDim cellValues(1 To rowCount, 1 To OUTPUT_LAST_COLUMN)
     End If
@@ -1118,6 +1375,7 @@ Private Function ApplyOutputPlan( _
                         cellValue = "'" & cellValue
                     End If
                     cellValues(rowNumber, columnNumber) = cellValue
+                    usedOutputColumns(CStr(columnNumber)) = columnNumber
                 Case "S"
                     If UBound(fields) <> 3 Then GoTo InvalidPlan
                     If Not IsNumeric(fields(2)) Or Not IsNumeric(fields(3)) Then GoTo InvalidPlan
@@ -1156,15 +1414,20 @@ Private Function ApplyOutputPlan( _
 
     If rowCount > 0 Then
         Set outputRange = ws.Range(ws.Cells(1, 1), ws.Cells(rowCount, OUTPUT_LAST_COLUMN))
-        outputRange.NumberFormat = "@"
+        For Each usedColumn In usedOutputColumns.Items
+            ws.Range( _
+                ws.Cells(1, CLng(usedColumn)), _
+                ws.Cells(rowCount, CLng(usedColumn))).NumberFormat = "@"
+        Next usedColumn
         ' Excel COM呼出しをセルごとではなく1回へまとめる
         outputRange.Value = cellValues
     End If
     ' 長文・改行を含む値の書込み後に折り返し、縮小表示、行高を確定する
-    ApplyOutputSheetDimensions ws, rowCount
+    ApplyOutputSheetDimensions ws, rowCount, OUTPUT_LAST_COLUMN, False
     For Each section In sections
         ApplyOutputSectionStyle ws, CStr(section(0)), CLng(section(1)), CLng(section(2))
     Next section
+    ApplyOutputValueLayout ws, rowCount, usedOutputColumns
     ApplyOutputSheetFont ws, rowCount
     ApplyOutputSheetView ws
     Set qualifications = parsedQualifications
@@ -1210,7 +1473,7 @@ Private Sub RenderOutputTwo( _
     outputLastRow = WriteOutputTwoBlock(ws, 53, outputTableIds, tableMaster)
     ApplyOutputTwoBlockStyle ws, 1, inputLastRow
     ApplyOutputTwoBlockStyle ws, 53, outputLastRow
-    ApplyOutputTwoSheetLayout ws
+    ApplyOutputTwoSheetLayout ws, False
 End Sub
 
 ' アウトプット②の旧内容・結合・書式を消して固定見出しを配置
@@ -1476,11 +1739,16 @@ End Function
 ' 数式判定と先頭アポストロフィの消費を避けて文字列を書き込む
 Private Sub SetOutputCellText(ByVal targetCell As Range, ByVal cellValue As String)
     targetCell.NumberFormat = "@"
+    targetCell.Value = OutputTextValue(cellValue)
+End Sub
+
+' Preserve a leading apostrophe when values are assigned to a text-formatted range.
+Private Function OutputTextValue(ByVal cellValue As String) As String
     If Left$(cellValue, 1) = "'" Then
         cellValue = "'" & cellValue
     End If
-    targetCell.Value = cellValue
-End Sub
+    OutputTextValue = cellValue
+End Function
 
 ' セクション種別に応じて塗りと外枠を設定
 Private Sub ApplyOutputSectionStyle( _
@@ -1568,7 +1836,7 @@ End Sub
 
 ' 指定範囲を塗り、最細の黒い外枠を設定
 Private Sub ApplyFilledFrame(ByVal targetRange As Range, ByVal fillColor As Long)
-    targetRange.Interior.Color = fillColor
+    If fillColor <> vbWhite Then targetRange.Interior.Color = fillColor
     ApplyOuterBorder targetRange
 End Sub
 
@@ -2049,8 +2317,7 @@ Private Sub ClearOutputSheet(ByVal ws As Worksheet, Optional ByVal applyLayout A
 
     clearLastRow = LastOutputRow(ws)
     With ws.Range(ws.Cells(1, 1), ws.Cells(MaxLong(clearLastRow, 1), OUTPUT_LAST_COLUMN))
-        .ClearContents
-        .ClearFormats
+        .Clear
     End With
     If applyLayout Then ApplyOutputSheetLayout ws
 End Sub
