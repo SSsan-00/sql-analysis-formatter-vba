@@ -37,6 +37,8 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_WritesQualifiedReplacementValuesOnce
     AnalyzeQueries_MapsQualifiedReplacementsToMultilineRows
     AnalyzeQueries_PreservesReplacementValuesOnParserFallback
+    AnalyzeQueries_FocusesSyntaxFallbackSqlRow
+    AnalyzeQueries_RendersInsertSelectWithoutColumnList
     AnalyzeQueries_ResolvesMatchingTemporaryTableDefinition
     AnalyzeQueries_PreservesUnmatchedTemporaryTableDefinition
     AnalyzeQueries_SeparatesTransferExpressionsFromColumns
@@ -1350,6 +1352,71 @@ Public Sub AnalyzeQueries_PreservesReplacementValuesOnParserFallback()
 
     AssertCellValue wsSql.Cells(2, COL_REPLACEMENT), "tb1." & nameText
     AssertCellValue wsOutput.Cells(1, 1), "SELECT tb1." & nameText & " FROM"
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' 構文エラーの論理行に対応するSQL解析シートの入力セルへフォーカスすることを確認
+Public Sub AnalyzeQueries_FocusesSyntaxFallbackSqlRow()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    wsSql.Cells(2, COL_SQL).Value = "SELECT 1;"
+    wsSql.Cells(3, COL_SQL).Value = "SELECT id FROM users WHERE;"
+    wsOutput.Activate
+
+    AnalyzeQueries False
+
+    If Not ActiveSheet Is wsSql Then
+        Fail "Syntax fallback should activate the SQL analysis sheet."
+    End If
+    If ActiveCell.Address <> wsSql.Cells(3, COL_SQL).Address Then
+        Fail "Syntax fallback should select the SQL input cell containing the error."
+    End If
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' 列指定なしINSERT SELECTを移送先テーブル側の和名で出力することを確認
+Public Sub AnalyzeQueries_RendersInsertSelectWithoutColumnList()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim archiveIdText As String
+    Dim userIdText As String
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    archiveIdText = W(&H30A2, &H30FC, &H30AB, &H30A4, &H30D6) & "ID"
+    userIdText = UserTableText() & "ID"
+    PutDefinition wsRef, 2, "user_archive", _
+        W(&H30E6, &H30FC, &H30B6, &H30FC, &H5C65, &H6B74), "id", archiveIdText
+    PutDefinition wsRef, 3, "tb1", UserTableText(), "id", userIdText
+    wsSql.Cells(2, COL_SQL).Value = _
+        "INSERT INTO user_archive SELECT tb1.id FROM users AS tb1;"
+
+    AnalyzeQueries False
+
+    AssertCellValue wsOutput.Cells(5, 1), DataTransferTitle()
+    AssertCellValue wsOutput.Cells(8, 1), archiveIdText
+    AssertCellValue wsOutput.Cells(8, 19), "tb1." & userIdText
 End Sub
 
 '@TestMethod("ClearData")

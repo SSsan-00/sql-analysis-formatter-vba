@@ -7,7 +7,7 @@ namespace SqlAnalysisFormatter.Parser;
 /// </summary>
 public static class VbaOutputProtocol
 {
-    private const string PlanHeader = "SAF_OUTPUT_PLAN\t3";
+    private const string PlanHeader = "SAF_OUTPUT_PLAN\t4";
     private const string MappingHeaderV1 = "SAF_MAPPINGS\t1";
     private const string MappingHeaderV2 = "SAF_MAPPINGS\t2";
 
@@ -26,6 +26,11 @@ public static class VbaOutputProtocol
             .OrderBy(cell => cell.Row)
             .ThenBy(cell => cell.Column)
             .Select(cell => $"C\t{cell.Row}\t{cell.Column}\t{Escape(cell.Value)}"));
+        if (plan.IsFallback && !string.IsNullOrWhiteSpace(plan.FallbackReason))
+        {
+            lines.Add(
+                $"F\t{plan.FallbackSourceStartLine ?? 0}\t{plan.FallbackSourceEndLine ?? 0}\t{Escape(plan.FallbackReason)}");
+        }
         lines.AddRange((plan.ReplacementQualifications ?? [])
             .OrderBy(item => item.QueryLine)
             .ThenBy(item => item.Order)

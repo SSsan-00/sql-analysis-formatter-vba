@@ -91,6 +91,8 @@ try {
         'AnalyzeQueries_WritesQualifiedReplacementValuesOnce',
         'AnalyzeQueries_MapsQualifiedReplacementsToMultilineRows',
         'AnalyzeQueries_PreservesReplacementValuesOnParserFallback',
+        'AnalyzeQueries_FocusesSyntaxFallbackSqlRow',
+        'AnalyzeQueries_RendersInsertSelectWithoutColumnList',
         'AnalyzeQueries_ResolvesMatchingTemporaryTableDefinition',
         'AnalyzeQueries_PreservesUnmatchedTemporaryTableDefinition',
         'AnalyzeQueries_SeparatesTransferExpressionsFromColumns',

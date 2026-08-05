@@ -9,6 +9,28 @@ namespace SqlAnalysisFormatter.Parser.Tests;
 public sealed class OutputSheetPlanBuilderTests
 {
     /// <summary>
+    /// 構文エラーの論理行をフォールバック通知用に保持することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_ReportsSyntaxErrorLineForFallbackNotification()
+    {
+        const string sql = """
+            SELECT u.id
+            FROM users AS u
+            WHERE;
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsTrue(plan.IsFallback);
+        Assert.AreEqual(3, plan.FallbackQueryStartRow);
+        Assert.AreEqual(3, plan.FallbackQueryEndRow);
+        Assert.AreEqual(3, plan.FallbackSourceStartLine);
+        Assert.AreEqual(3, plan.FallbackSourceEndLine);
+        StringAssert.Contains(plan.FallbackReason, "T-SQL解析エラー");
+    }
+
+    /// <summary>
     /// 修飾付きアスタリスクを全項目として表示することを確認
     /// </summary>
     [TestMethod]
@@ -2017,6 +2039,146 @@ public sealed class OutputSheetPlanBuilderTests
             (8, 17, "tb2.氏名"),
             (9, 1, "検索条件"),
             (9, 17, "tb2.状態 = 'ACTIVE'"));
+    }
+
+    /// <summary>
+    /// INSERT対象列を省略した場合はSELECT取得項目名を同じ位置の移送先として扱うことを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_DerivesInsertSelectTargetsWhenColumnListIsOmitted()
+    {
+        const string sql = """
+            INSERT INTO user_archive
+            SELECT
+                tb1.user_id,
+                TRIM(tb1.name) AS display_name,
+                CASE WHEN tb1.active = 1 THEN 'ACTIVE' ELSE 'INACTIVE' END AS status
+            FROM users AS tb1
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("user_archive", "ユーザーアーカイブ", "user_id", "ユーザーID"),
+            new("user_archive", "ユーザーアーカイブ", "display_name", "表示名"),
+            new("user_archive", "ユーザーアーカイブ", "status", "状態"),
+            new("tb1", "ユーザー", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        var transferTitleRow = plan.Cells.Single(cell =>
+            cell.Column == 1 && cell.Value == "＜データ移送表＞").Row;
+        var firstTransferRow = transferTitleRow + 3;
+        Assert.AreEqual("ユーザーID", CellValue(plan, firstTransferRow, 1));
+        Assert.AreEqual("tb1.user_id", CellValue(plan, firstTransferRow, 19));
+        Assert.AreEqual("表示名", CellValue(plan, firstTransferRow + 1, 1));
+        Assert.AreEqual("tb1.name", CellValue(plan, firstTransferRow + 1, 19));
+        Assert.AreEqual("TRIM(tb1.name)", CellValue(plan, firstTransferRow + 1, 37));
+        Assert.AreEqual("状態", CellValue(plan, firstTransferRow + 2, 1));
+        Assert.AreEqual("CASE結果", CellValue(plan, firstTransferRow + 2, 37));
+    }
+
+    /// <summary>
+    /// parser用列IDから物理列IDへ戻して移送先テーブル側の和名を解決することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_ResolvesImplicitInsertTargetFromSourceParserFieldId()
+    {
+        const string sql = """
+            INSERT INTO user_archive
+            SELECT tb1.__SAF_FIELD_R000003__
+            FROM users AS tb1
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("user_archive", "ユーザーアーカイブ", "id", "アーカイブID", "__SAF_FIELD_R000002__"),
+            new("tb1", "ユーザー", "id", "ユーザーID", "__SAF_FIELD_R000003__")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        var transferTitleRow = plan.Cells.Single(cell =>
+            cell.Column == 1 && cell.Value == "＜データ移送表＞").Row;
+        var transferRow = transferTitleRow + 3;
+        Assert.AreEqual("アーカイブID", CellValue(plan, transferRow, 1));
+        Assert.AreEqual("tb1.ユーザーID", CellValue(plan, transferRow, 19));
+    }
+
+    /// <summary>
+    /// INSERT対象列を省略した場合の全項目と別名なし式を元表記の移送先として扱うことを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_UsesStarAndExpressionAsImplicitInsertSelectTargets()
+    {
+        const string sql = """
+            INSERT INTO user_archive
+            SELECT tb1.*, SYSDATETIME()
+            FROM users AS tb1
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, [new("tb1", "ユーザー", "", "")]);
+
+        Assert.IsFalse(plan.IsFallback);
+        var transferTitleRow = plan.Cells.Single(cell =>
+            cell.Column == 1 && cell.Value == "＜データ移送表＞").Row;
+        var firstTransferRow = transferTitleRow + 3;
+        Assert.AreEqual("tb1.全項目", CellValue(plan, firstTransferRow, 1));
+        Assert.AreEqual("tb1.全項目", CellValue(plan, firstTransferRow, 19));
+        Assert.AreEqual("SYSDATETIME()", CellValue(plan, firstTransferRow + 1, 1));
+        Assert.AreEqual("SYSDATETIME()", CellValue(plan, firstTransferRow + 1, 37));
+    }
+
+    /// <summary>
+    /// INSERT対象列を省略したUNIONでは第1SELECTの取得項目名を各移送パターンへ適用することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_DerivesOmittedInsertTargetsFromFirstUnionBranch()
+    {
+        const string sql = """
+            INSERT INTO user_archive
+            SELECT tb1.user_id AS id, tb1.name AS display_name
+            FROM users AS tb1
+            UNION ALL
+            SELECT tb2.user_id, TRIM(tb2.name)
+            FROM archived_users AS tb2
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("user_archive", "ユーザーアーカイブ", "id", "ユーザーID"),
+            new("user_archive", "ユーザーアーカイブ", "display_name", "表示名"),
+            new("tb1", "ユーザー", "", ""),
+            new("tb2", "退会ユーザー", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(2, plan.Cells.Count(cell => cell.Column == 1 && cell.Value == "ユーザーID"));
+        Assert.AreEqual(2, plan.Cells.Count(cell => cell.Column == 1 && cell.Value == "表示名"));
+        Assert.IsTrue(plan.Cells.Any(cell => cell.Column == 19 && cell.Value == "tb1.user_id"));
+        Assert.IsTrue(plan.Cells.Any(cell => cell.Column == 19 && cell.Value == "tb2.user_id"));
+        Assert.IsTrue(plan.Cells.Any(cell => cell.Column == 37 && cell.Value == "TRIM(tb2.name)"));
+    }
+
+    /// <summary>
+    /// INSERT対象列を省略してもUNION分岐間の取得項目数不一致はフォールバックすることを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_FallsBackWhenOmittedInsertTargetUnionBranchesDifferInColumnCount()
+    {
+        const string sql = """
+            INSERT INTO user_archive
+            SELECT tb1.user_id, tb1.name FROM users AS tb1
+            UNION ALL
+            SELECT tb2.user_id FROM archived_users AS tb2
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsTrue(plan.IsFallback);
+        StringAssert.Contains(plan.FallbackReason, "移送パターン2");
+        StringAssert.Contains(plan.FallbackReason, "取得項目数が一致しません");
     }
 
     /// <summary>

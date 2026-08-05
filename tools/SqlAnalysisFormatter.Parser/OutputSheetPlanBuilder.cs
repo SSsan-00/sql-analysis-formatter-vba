@@ -27,7 +27,7 @@ public static class OutputSheetPlanBuilder
         var script = ParseScript(sql, out var errors);
         if (errors.Count > 0 || script is null)
         {
-            var fallback = CreateFallback(sql, BuildParseErrorReason(errors));
+            var fallback = CreateParseFallback(sql, errors);
             return ParserFieldIdentifierRestorer.Restore(fallback, mappings);
         }
 
@@ -38,7 +38,7 @@ public static class OutputSheetPlanBuilder
             script = ParseScript(qualifiedSql, out errors);
             if (errors.Count > 0 || script is null)
             {
-                var fallback = CreateFallback(qualifiedSql, BuildParseErrorReason(errors));
+                var fallback = CreateParseFallback(qualifiedSql, errors);
                 return ParserFieldIdentifierRestorer.Restore(fallback, mappings);
             }
         }
@@ -248,7 +248,10 @@ public static class OutputSheetPlanBuilder
                 InsertStatement insertStatement => BuildInsert(sql, insertStatement, mappings),
                 UpdateStatement updateStatement => BuildUpdate(sql, updateStatement, mappings),
                 DeleteStatement deleteStatement => BuildDelete(sql, deleteStatement, mappings),
-                _ => CreateFallback(sql, "未対応のステートメント: " + StatementKind(statement))
+                _ => CreateFallback(
+                    sql,
+                    "未対応のステートメント: " + StatementKind(statement),
+                    statement)
             };
         }
         catch (UnsupportedOutputException ex)
@@ -411,6 +414,62 @@ public static class OutputSheetPlanBuilder
     }
 
     /// <summary>
+    /// INSERT対象列を省略した場合にSELECT取得項目から仮の移送先項目名を構成
+    /// </summary>
+    private static IReadOnlyList<string> BuildInsertSelectTargets(
+        string sql,
+        InsertSpecification specification,
+        QuerySpecification sourceQuery,
+        IReadOnlyList<MappingDefinition> mappings)
+    {
+        if (specification.Columns.Count > 0)
+        {
+            return specification.Columns
+                .Select(column => FragmentText(sql, column))
+                .ToArray();
+        }
+
+        var targetId = specification.Target is NamedTableReference named
+            ? named.SchemaObject.BaseIdentifier.Value
+            : string.Empty;
+        var targets = new List<string>(sourceQuery.SelectElements.Count);
+        foreach (var element in sourceQuery.SelectElements)
+        {
+            if (element is SelectStarExpression star)
+            {
+                targets.Add(RenderSelectStar(DisplayText(sql, star)));
+                continue;
+            }
+
+            if (element is not SelectScalarExpression scalar)
+            {
+                throw new UnsupportedOutputException(
+                    "INSERT SELECTの取得項目形式は未対応: " + element.GetType().Name,
+                    element);
+            }
+
+            string fieldId;
+            if (scalar.ColumnName is not null)
+            {
+                fieldId = FragmentText(sql, scalar.ColumnName);
+            }
+            else if (scalar.Expression is ColumnReferenceExpression column &&
+                column.MultiPartIdentifier?.Identifiers.Count > 0)
+            {
+                fieldId = column.MultiPartIdentifier.Identifiers[^1].Value;
+            }
+            else
+            {
+                fieldId = DisplayText(sql, scalar.Expression);
+            }
+
+            targets.Add(ResolveOutputFieldName(targetId, fieldId, mappings));
+        }
+
+        return targets;
+    }
+
+    /// <summary>
     /// SELECT INTOの出力別名を変換定義から和名へ解決
     /// </summary>
     private static string ResolveOutputFieldName(
@@ -418,8 +477,16 @@ public static class OutputSheetPlanBuilder
         string fieldId,
         IReadOnlyList<MappingDefinition> mappings)
     {
+        var physicalFieldId = mappings
+            .FirstOrDefault(item =>
+                item.ParserFieldId.Length > 0 &&
+                string.Equals(item.ParserFieldId, fieldId, StringComparison.OrdinalIgnoreCase))
+            ?.FieldId ?? fieldId;
         var mapping = mappings
-            .Where(item => string.Equals(item.FieldId, fieldId, StringComparison.OrdinalIgnoreCase))
+            .Where(item => string.Equals(
+                item.FieldId,
+                physicalFieldId,
+                StringComparison.OrdinalIgnoreCase))
             .Where(item => !string.IsNullOrWhiteSpace(item.FieldName))
             .OrderByDescending(item =>
                 string.Equals(item.TableId, targetId, StringComparison.OrdinalIgnoreCase))
@@ -520,7 +587,8 @@ public static class OutputSheetPlanBuilder
             return CreateFallback(sql, "未対応のINSERT形式: SELECTの集合演算", selectSource.Select);
         }
 
-        if (specification.Columns.Count != sourceQuery.SelectElements.Count)
+        if (specification.Columns.Count > 0 &&
+            specification.Columns.Count != sourceQuery.SelectElements.Count)
         {
             return CreateFallback(
                 sql,
@@ -538,9 +606,7 @@ public static class OutputSheetPlanBuilder
             sourceChildren.Where(child => !child.IsNamed).Select(child => child.Name));
         plans.Add(ReplaceSubqueries(sourcePlan, sql, sourceChildren));
 
-        var targets = specification.Columns
-            .Select(column => FragmentText(sql, column))
-            .ToArray();
+        var targets = BuildInsertSelectTargets(sql, specification, sourceQuery, mappings);
         var transfers = BuildSelectTransfers(sql, targets, sourceQuery.SelectElements);
         var targetDisplay = BuildTargetTableDisplay(
             specification.Target,
@@ -593,9 +659,10 @@ public static class OutputSheetPlanBuilder
                 sourceExpression);
         }
 
+        var targets = BuildInsertSelectTargets(sql, specification, branches[0], mappings);
         for (var index = 0; index < branches.Count; index++)
         {
-            if (specification.Columns.Count != branches[index].SelectElements.Count)
+            if (targets.Count != branches[index].SelectElements.Count)
             {
                 return CreateFallback(
                     sql,
@@ -614,9 +681,6 @@ public static class OutputSheetPlanBuilder
             sourceChildren.Where(child => !child.IsNamed).Select(child => child.Name));
         plans.Add(ReplaceSubqueries(sourcePlan, sql, sourceChildren));
 
-        var targets = specification.Columns
-            .Select(column => FragmentText(sql, column))
-            .ToArray();
         var transferPatterns = branches
             .Select(branch => BuildSelectTransfers(sql, targets, branch.SelectElements))
             .ToArray();
@@ -1260,7 +1324,11 @@ public static class OutputSheetPlanBuilder
             plans.Any(plan => plan.IsFallback),
             plans.FirstOrDefault(plan => plan.IsFallback)?.FallbackReason,
             fallbackQueryStartRow,
-            fallbackQueryEndRow);
+            fallbackQueryEndRow,
+            FallbackSourceStartLine: plans
+                .FirstOrDefault(plan => plan.IsFallback)?.FallbackSourceStartLine,
+            FallbackSourceEndLine: plans
+                .FirstOrDefault(plan => plan.IsFallback)?.FallbackSourceEndLine);
     }
 
     /// <summary>
@@ -3585,7 +3653,9 @@ public static class OutputSheetPlanBuilder
     private static OutputSheetPlan CreateFallback(
         string sql,
         string reason,
-        TSqlFragment? causeFragment = null)
+        TSqlFragment? causeFragment = null,
+        int? causeStartLine = null,
+        int? causeEndLine = null)
     {
         var text = sql.Trim('\r', '\n');
         var lines = text.Length == 0
@@ -3598,10 +3668,15 @@ public static class OutputSheetPlanBuilder
             .Select((line, index) => new OutputCell(index + 1, 1, line))
             .ToList();
         var reasonRow = lines.Length == 0 ? 1 : lines.Length + 2;
+        var (sourceStartLine, sourceEndLine) = ResolveFallbackSourceLines(
+            causeFragment,
+            causeStartLine,
+            causeEndLine);
         var (queryStartRow, queryEndRow) = ResolveFallbackQueryRows(
             sql,
             lines.Length,
-            causeFragment);
+            sourceStartLine,
+            sourceEndLine);
         var message = queryStartRow.HasValue && queryEndRow.HasValue
             ? FormatFallbackMessage(reason, queryStartRow.Value, queryEndRow.Value)
             : "フォールバック原因: " + reason;
@@ -3613,33 +3688,65 @@ public static class OutputSheetPlanBuilder
             true,
             reason,
             queryStartRow,
-            queryEndRow);
+            queryEndRow,
+            FallbackSourceStartLine: sourceStartLine,
+            FallbackSourceEndLine: sourceEndLine);
     }
 
     /// <summary>
-    /// 原因断片をフォールバック出力上の行範囲へ変換
+    /// 原因断片または明示行を元SQL上の論理行範囲へ変換
     /// </summary>
-    private static (int? StartRow, int? EndRow) ResolveFallbackQueryRows(
-        string sql,
-        int outputLineCount,
-        TSqlFragment? causeFragment)
+    private static (int? StartLine, int? EndLine) ResolveFallbackSourceLines(
+        TSqlFragment? causeFragment,
+        int? causeStartLine,
+        int? causeEndLine)
     {
-        if (outputLineCount == 0)
+        if (causeStartLine.HasValue)
         {
-            return (null, null);
+            return (
+                Math.Max(causeStartLine.Value, 1),
+                Math.Max((causeEndLine ?? causeStartLine).Value, causeStartLine.Value));
         }
 
         if (causeFragment is null ||
             causeFragment.LastTokenIndex < 0 ||
             causeFragment.LastTokenIndex >= causeFragment.ScriptTokenStream.Count)
         {
+            return (null, null);
+        }
+
+        var endLine = causeFragment.ScriptTokenStream[causeFragment.LastTokenIndex].Line;
+        return (Math.Max(causeFragment.StartLine, 1), Math.Max(endLine, causeFragment.StartLine));
+    }
+
+    /// <summary>
+    /// 元SQL上の原因行を先頭改行除去後のフォールバック出力行へ変換
+    /// </summary>
+    private static (int? StartRow, int? EndRow) ResolveFallbackQueryRows(
+        string sql,
+        int outputLineCount,
+        int? sourceStartLine,
+        int? sourceEndLine)
+    {
+        if (outputLineCount == 0)
+        {
+            return (null, null);
+        }
+
+        if (!sourceStartLine.HasValue)
+        {
             return (1, outputLineCount);
         }
 
         var removedLeadingLines = CountLeadingLineBreaks(sql);
-        var startRow = Math.Clamp(causeFragment.StartLine - removedLeadingLines, 1, outputLineCount);
-        var endLine = causeFragment.ScriptTokenStream[causeFragment.LastTokenIndex].Line;
-        var endRow = Math.Clamp(endLine - removedLeadingLines, startRow, outputLineCount);
+        var startRow = Math.Clamp(
+            sourceStartLine.Value - removedLeadingLines,
+            1,
+            outputLineCount);
+        var endRow = Math.Clamp(
+            (sourceEndLine ?? sourceStartLine).Value - removedLeadingLines,
+            startRow,
+            outputLineCount);
         return (startRow, endRow);
     }
 
@@ -3694,6 +3801,19 @@ public static class OutputSheetPlanBuilder
 
         var error = errors[0];
         return $"T-SQL解析エラー (行{error.Line}, 列{error.Column}): {error.Message}";
+    }
+
+    /// <summary>
+    /// parserの構文エラー理由と先頭エラー行をフォールバック計画へ設定
+    /// </summary>
+    private static OutputSheetPlan CreateParseFallback(string sql, IList<ParseError> errors)
+    {
+        var errorLine = errors.Count > 0 ? errors[0].Line : (int?)null;
+        return CreateFallback(
+            sql,
+            BuildParseErrorReason(errors),
+            causeStartLine: errorLine,
+            causeEndLine: errorLine);
     }
 
     /// <summary>

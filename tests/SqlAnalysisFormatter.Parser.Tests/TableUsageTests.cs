@@ -72,6 +72,22 @@ public sealed class TableUsageTests
     }
 
     [TestMethod]
+    public void Build_InsertSelectWithoutColumnList_CollectsSourceAndTargetTables()
+    {
+        const string sql = """
+            INSERT INTO #wkuser
+            SELECT u.id, u.name
+            FROM dbo.users AS u;
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsFalse(plan.IsFallback);
+        CollectionAssert.AreEqual(new[] { "users" }, plan.InputTableIds.ToArray());
+        CollectionAssert.AreEqual(new[] { "#wkuser" }, plan.OutputTableIds.ToArray());
+    }
+
+    [TestMethod]
     public void Build_InsertValues_DoesNotClassifyScalarSubqueryAsInputTable()
     {
         const string sql = """

@@ -73,6 +73,8 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     Dim parserText As String
     Dim parserQueryText As String
     Dim fallbackReason As String
+    Dim fallbackStartLine As Long
+    Dim fallbackEndLine As Long
     Dim replacementValues As Object
     Dim replacementValuesByRow As Object
     Dim queryLineRows As Collection
@@ -193,7 +195,8 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     analysisStage = "parse SQL and render output"
     If Len(convertedQueryText) > 0 Then
         If Not TryWriteExternalOutputPlan( _
-            wsOutput, wsRef, parserQueryText, qualifications, inputTableIds, outputTableIds, fallbackReason) Then
+            wsOutput, wsRef, parserQueryText, qualifications, inputTableIds, outputTableIds, _
+            fallbackReason, fallbackStartLine, fallbackEndLine) Then
             ClearOutputTwoSheet wsOutputTwo
             WriteFallbackOutput wsOutput, convertedQueryText, fallbackReason
         Else
@@ -235,11 +238,18 @@ AnalyzeCleanUp:
     If errorNumber <> 0 Then
         Err.Raise errorNumber, errorSource, errorDescription
     End If
+    If Len(fallbackReason) > 0 And fallbackStartLine > 0 Then
+        FocusFallbackQueryLine wsSql, queryLineRows, fallbackStartLine
+    End If
     If showMessage And duplicateTableIds.Count > 0 Then
         MsgBox DuplicateTableWarningMessage(duplicateTableIds), vbExclamation
     End If
     If showMessage Then
-        MsgBox AnalyzeDoneMessage(), vbInformation
+        If Len(fallbackReason) > 0 Then
+            MsgBox AnalyzeFallbackMessage(fallbackReason), vbExclamation
+        Else
+            MsgBox AnalyzeDoneMessage(), vbInformation
+        End If
     End If
     Exit Sub
 
@@ -1159,6 +1169,20 @@ Private Sub AddQueryLineRows( _
     Next lineIndex
 End Sub
 
+' parserの論理行に対応するSQL解析シートの入力セルへ移動
+Private Sub FocusFallbackQueryLine( _
+    ByVal wsSql As Worksheet, _
+    ByVal queryLineRows As Collection, _
+    ByVal queryLine As Long)
+
+    Dim sqlRow As Long
+
+    If queryLine < 1 Or queryLine > queryLineRows.Count Then Exit Sub
+    sqlRow = CLng(queryLineRows.Item(queryLine))
+    wsSql.Activate
+    Application.Goto wsSql.Cells(sqlRow, COL_SQL), True
+End Sub
+
 ' アウトプットシートへコピーボタンを配置
 Private Sub InstallOutputButton( _
     ByVal ws As Worksheet, _
@@ -1189,7 +1213,9 @@ Private Function TryWriteExternalOutputPlan( _
     ByRef qualifications As Collection, _
     ByRef inputTableIds As Collection, _
     ByRef outputTableIds As Collection, _
-    ByRef fallbackReason As String) As Boolean
+    ByRef fallbackReason As String, _
+    ByRef fallbackStartLine As Long, _
+    ByRef fallbackEndLine As Long) As Boolean
 
     Dim parserPath As String
     Dim inputPath As String
@@ -1201,6 +1227,8 @@ Private Function TryWriteExternalOutputPlan( _
 
     On Error GoTo ParserError
     fallbackReason = ""
+    fallbackStartLine = 0
+    fallbackEndLine = 0
     Set qualifications = New Collection
     Set inputTableIds = New Collection
     Set outputTableIds = New Collection
@@ -1229,7 +1257,8 @@ Private Function TryWriteExternalOutputPlan( _
 
     outputText = ReadUnicodeTextFile(outputPath)
     succeeded = ApplyOutputPlan( _
-        wsOutput, outputText, qualifications, inputTableIds, outputTableIds)
+        wsOutput, outputText, qualifications, inputTableIds, outputTableIds, _
+        fallbackReason, fallbackStartLine, fallbackEndLine)
     If Not succeeded Then
         fallbackReason = ParserOutputInvalidReason()
     End If
@@ -1311,7 +1340,10 @@ Private Function ApplyOutputPlan( _
     ByVal planText As String, _
     ByRef qualifications As Collection, _
     ByRef inputTableIds As Collection, _
-    ByRef outputTableIds As Collection) As Boolean
+    ByRef outputTableIds As Collection, _
+    ByRef fallbackReason As String, _
+    ByRef fallbackStartLine As Long, _
+    ByRef fallbackEndLine As Long) As Boolean
     Dim lines As Variant
     Dim fields As Variant
     Dim cellValues As Variant
@@ -1328,8 +1360,10 @@ Private Function ApplyOutputPlan( _
     Dim originalValue As String
     Dim qualifiedValue As String
     Dim tableId As String
+    Dim parsedFallbackReason As String
     Dim lineIndex As Long
     Dim planVersion As Long
+    Dim fallbackFlag As Long
     Dim rowCount As Long
     Dim rowNumber As Long
     Dim columnNumber As Long
@@ -1337,6 +1371,9 @@ Private Function ApplyOutputPlan( _
     Dim qualificationOrder As Long
     Dim startRow As Long
     Dim endRow As Long
+    Dim parsedFallbackStartLine As Long
+    Dim parsedFallbackEndLine As Long
+    Dim fallbackDiagnosticSeen As Boolean
     Dim outputRange As Range
 
     On Error GoTo InvalidPlan
@@ -1349,10 +1386,13 @@ Private Function ApplyOutputPlan( _
     If CStr(fields(0)) <> "SAF_OUTPUT_PLAN" Then Exit Function
     If Not IsNumeric(fields(1)) Then Exit Function
     planVersion = CLng(fields(1))
-    If planVersion < 1 Or planVersion > 3 Then Exit Function
+    If planVersion < 1 Or planVersion > 4 Then Exit Function
     If Not IsNumeric(fields(2)) Then Exit Function
     rowCount = CLng(fields(2))
     If rowCount < 0 Then Exit Function
+    If Not IsNumeric(fields(3)) Then Exit Function
+    fallbackFlag = CLng(fields(3))
+    If fallbackFlag <> 0 And fallbackFlag <> 1 Then Exit Function
 
     Set sections = New Collection
     Set parsedQualifications = New Collection
@@ -1401,6 +1441,17 @@ Private Function ApplyOutputPlan( _
                     If Len(originalValue) = 0 Or Len(qualifiedValue) = 0 Then GoTo InvalidPlan
                     parsedQualifications.Add Array( _
                         queryLine, qualificationOrder, originalValue, qualifiedValue)
+                Case "F"
+                    If planVersion < 4 Or UBound(fields) <> 3 Then GoTo InvalidPlan
+                    If fallbackFlag <> 1 Or fallbackDiagnosticSeen Then GoTo InvalidPlan
+                    If Not IsNumeric(fields(1)) Or Not IsNumeric(fields(2)) Then GoTo InvalidPlan
+                    parsedFallbackStartLine = CLng(fields(1))
+                    parsedFallbackEndLine = CLng(fields(2))
+                    If parsedFallbackStartLine < 0 Or _
+                        parsedFallbackEndLine < parsedFallbackStartLine Then GoTo InvalidPlan
+                    parsedFallbackReason = UnescapeProtocolField(CStr(fields(3)))
+                    If Len(parsedFallbackReason) = 0 Then GoTo InvalidPlan
+                    fallbackDiagnosticSeen = True
                 Case "T"
                     If planVersion < 3 Or UBound(fields) <> 2 Then GoTo InvalidPlan
                     tableId = UnescapeProtocolField(CStr(fields(2)))
@@ -1418,6 +1469,7 @@ Private Function ApplyOutputPlan( _
             End Select
         End If
     Next lineIndex
+    If planVersion >= 4 And fallbackFlag = 1 And Not fallbackDiagnosticSeen Then GoTo InvalidPlan
 
     If rowCount > 0 Then
         Set outputRange = ws.Range(ws.Cells(1, 1), ws.Cells(rowCount, OUTPUT_LAST_COLUMN))
@@ -1440,6 +1492,9 @@ Private Function ApplyOutputPlan( _
     Set qualifications = parsedQualifications
     Set inputTableIds = parsedInputTableIds
     Set outputTableIds = parsedOutputTableIds
+    fallbackReason = parsedFallbackReason
+    fallbackStartLine = parsedFallbackStartLine
+    fallbackEndLine = parsedFallbackEndLine
     ApplyOutputPlan = True
     Exit Function
 
@@ -2751,6 +2806,12 @@ End Function
 ' 解析完了メッセージを取得
 Private Function AnalyzeDoneMessage() As String
     AnalyzeDoneMessage = W(&H89E3, &H6790, &H304C, &H5B8C, &H4E86, &H3057, &H307E, &H3057, &H305F, &H3002)
+End Function
+
+' フォールバック理由を含む解析完了メッセージを取得
+Private Function AnalyzeFallbackMessage(ByVal reason As String) As String
+    AnalyzeFallbackMessage = AnalyzeDoneMessage() & vbCrLf & vbCrLf & _
+        W(&H30A8, &H30E9, &H30FC, &H5185, &H5BB9) & ":" & vbCrLf & reason
 End Function
 
 ' コピー完了メッセージを取得

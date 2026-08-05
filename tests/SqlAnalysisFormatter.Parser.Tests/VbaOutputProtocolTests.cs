@@ -9,6 +9,31 @@ namespace SqlAnalysisFormatter.Parser.Tests;
 public sealed class VbaOutputProtocolTests
 {
     /// <summary>
+    /// フォールバック理由と原因行をVBA通知用の診断行へ直列化することを確認
+    /// </summary>
+    [TestMethod]
+    public void SerializePlan_WritesFallbackDiagnostic()
+    {
+        var plan = new OutputSheetPlan(
+            [new OutputCell(1, 1, "SELECT * FROM users WHERE;")],
+            [],
+            3,
+            true,
+            "WHEREの近くに正しくない構文があります。",
+            8,
+            8,
+            FallbackSourceStartLine: 2,
+            FallbackSourceEndLine: 2);
+
+        var text = VbaOutputProtocol.SerializePlan(plan);
+
+        StringAssert.StartsWith(text, "SAF_OUTPUT_PLAN\t4\t3\t1");
+        StringAssert.Contains(
+            text,
+            "F\t2\t2\tWHEREの近くに正しくない構文があります。");
+    }
+
+    /// <summary>
     /// 描画計画をVBA用プロトコルへ直列化できることを確認
     /// </summary>
     [TestMethod]
@@ -37,7 +62,7 @@ public sealed class VbaOutputProtocolTests
 
         var expected = string.Join(
             "\r\n",
-            "SAF_OUTPUT_PLAN\t3\t4\t0",
+            "SAF_OUTPUT_PLAN\t4\t4\t0",
             "C\t1\t1\t見出し",
             "C\t3\t17\tline1\\r\\nline2\\\\value\\tend",
             "Q\t2\t8\t名前\ttb1.名前",

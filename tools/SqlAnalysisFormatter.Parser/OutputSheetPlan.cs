@@ -44,7 +44,9 @@ public sealed record OutputSheetPlan(
     int? FallbackQueryEndRow = null,
     IReadOnlyList<OutputReplacementQualification>? ReplacementQualifications = null,
     IReadOnlyList<string>? InputTableIds = null,
-    IReadOnlyList<string>? OutputTableIds = null)
+    IReadOnlyList<string>? OutputTableIds = null,
+    int? FallbackSourceStartLine = null,
+    int? FallbackSourceEndLine = null)
 {
     public IReadOnlyList<string> InputTableIds { get; init; } = InputTableIds ?? [];
 
