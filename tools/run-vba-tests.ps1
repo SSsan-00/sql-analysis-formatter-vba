@@ -77,6 +77,7 @@ try {
         'AnalyzeQueries_ConvertsTsqlFunctionFixtures',
         'AnalyzeQueries_ProcessesQueriesWithoutMappings',
         'AnalyzeQueries_RendersMatchedInputAndOutputTables',
+        'AnalyzeQueries_UsesOutputTwoNameForExactMissingReference',
         'AnalyzeQueries_RendersSupportedTablesDuringPartialFallback',
         'AnalyzeQueries_SortsOutputTwoByCompositeTableNumber',
         'AnalyzeQueries_LeavesOutputTwoHeaderOnlyOnFallback',

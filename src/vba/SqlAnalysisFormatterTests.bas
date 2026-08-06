@@ -23,6 +23,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_ConvertsTsqlFunctionFixtures
     AnalyzeQueries_ProcessesQueriesWithoutMappings
     AnalyzeQueries_RendersMatchedInputAndOutputTables
+    AnalyzeQueries_UsesOutputTwoNameForExactMissingReference
     AnalyzeQueries_RendersSupportedTablesDuringPartialFallback
     AnalyzeQueries_SortsOutputTwoByCompositeTableNumber
     AnalyzeQueries_LeavesOutputTwoHeaderOnlyOnFallback
@@ -355,6 +356,59 @@ Public Sub AnalyzeQueries_RendersMatchedInputAndOutputTables()
     AssertDataBlock wsOutput.Range("BS4:CQ4")
     AssertDataBlock wsOutput.Range("CR4:CV4")
     AssertBlankSeparatorRange wsOutput.Range("AW1:AZ6")
+    wsTableList.Range("A2:C200").ClearContents
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' アウトプット②とIDが完全一致する未取得参照だけをテーブル名称へ置換することを確認
+Public Sub AnalyzeQueries_UsesOutputTwoNameForExactMissingReference()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim wsOutputTwo As Worksheet
+    Dim wsTableList As Worksheet
+    Dim missingNameText As String
+    Dim definitionLocationName As String
+    Dim expectedReference As String
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+    Set wsOutputTwo = ThisWorkbook.Worksheets(OutputSheetTwoName())
+    Set wsTableList = ThisWorkbook.Worksheets(TableListSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    wsTableList.Range("A2:C200").ClearContents
+    definitionLocationName = "definition location"
+    PutDefinition wsRef, 2, "locations", definitionLocationName, "", ""
+    PutTableListRow wsTableList, 2, "[USERS]", "user master", "1-1"
+    PutTableListRow wsTableList, 3, "orders", "order master", "2-1"
+    PutTableListRow wsTableList, 4, "audit_logs", "", "3-1"
+    PutTableListRow wsTableList, 5, "locations", "table-list location", "4-1"
+    wsSql.Cells(2, COL_SQL).Value = _
+        "SELECT users.name FROM users " & _
+        "JOIN orders AS o ON users.id = o.user_id " & _
+        "JOIN audit_logs ON users.id = audit_logs.user_id " & _
+        "JOIN locations ON users.id = locations.user_id;"
+
+    AnalyzeQueries False
+
+    missingNameText = "(" & W(&H548C, &H540D, &H672A, &H53D6, &H5F97) & ")"
+    expectedReference = ReferenceTablesText() & ": user master" & W(&H3001) & _
+        missingNameText & "[o]" & W(&H3001) & _
+        missingNameText & "[audit_logs]" & W(&H3001) & _
+        definitionLocationName & "[locations]"
+    AssertCellValue wsOutput.Cells(2, 1), expectedReference
+    AssertCellValue wsOutputTwo.Range("C4"), "users"
+    AssertCellValue wsOutputTwo.Range("S4"), "user master"
+    AssertCellValue wsOutputTwo.Range("C5"), "orders"
+    AssertCellValue wsOutputTwo.Range("S6"), ""
+    AssertCellValue wsOutputTwo.Range("S7"), "table-list location"
     wsTableList.Range("A2:C200").ClearContents
 End Sub
 

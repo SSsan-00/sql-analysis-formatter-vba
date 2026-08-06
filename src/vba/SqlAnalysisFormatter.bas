@@ -203,6 +203,8 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
             ApplyReplacementQualifications _
                 replacementValuesByRow, queryLineRows, qualifications
             RenderOutputTwo wsOutputTwo, inputTableIds, outputTableIds, tableMaster
+            ApplyOutputTwoNamesToMissingReferences _
+                wsOutput, inputTableIds, outputTableIds, tableMaster
         End If
     Else
         ClearOutputTwoSheet wsOutputTwo
@@ -1538,6 +1540,84 @@ Private Sub RenderOutputTwo( _
     ApplyOutputTwoSheetLayout ws, False
 End Sub
 
+' アウトプット②へ表示する完全一致IDの名称で未取得の参照テーブルだけを補完
+Private Sub ApplyOutputTwoNamesToMissingReferences( _
+    ByVal wsOutput As Worksheet, _
+    ByVal inputTableIds As Collection, _
+    ByVal outputTableIds As Collection, _
+    ByVal tableMaster As Object)
+
+    Dim matchedNames As Object
+    Dim referenceValues As Variant
+    Dim tableId As Variant
+    Dim rowNumber As Long
+    Dim lastRow As Long
+    Dim referencePrefix As String
+    Dim missingToken As String
+    Dim cellText As String
+    Dim updatedText As String
+
+    Set matchedNames = CreateCaseInsensitiveTextDictionary()
+    AddMatchedOutputTwoNames matchedNames, inputTableIds, tableMaster
+    AddMatchedOutputTwoNames matchedNames, outputTableIds, tableMaster
+    If matchedNames.Count = 0 Then Exit Sub
+
+    lastRow = LastOutputRow(wsOutput, OUTPUT_LAST_COLUMN)
+    If lastRow < 1 Then Exit Sub
+    If lastRow = 1 Then
+        ReDim referenceValues(1 To 1, 1 To 1)
+        referenceValues(1, 1) = wsOutput.Cells(1, 1).Value2
+    Else
+        referenceValues = wsOutput.Range( _
+            wsOutput.Cells(1, 1), _
+            wsOutput.Cells(lastRow, 1)).Value2
+    End If
+
+    referencePrefix = ReferenceTablesText() & ": "
+    For rowNumber = 1 To lastRow
+        cellText = CStr(referenceValues(rowNumber, 1))
+        If StrComp(Left$(cellText, Len(referencePrefix)), referencePrefix, vbBinaryCompare) = 0 Then
+            updatedText = cellText
+            For Each tableId In matchedNames.Keys
+                missingToken = "(" & MissingNameText() & ")[" & CStr(tableId) & "]"
+                updatedText = Replace( _
+                    updatedText, _
+                    missingToken, _
+                    CStr(matchedNames(CStr(tableId))), _
+                    1, _
+                    -1, _
+                    vbTextCompare)
+            Next tableId
+            If StrComp(updatedText, cellText, vbBinaryCompare) <> 0 Then
+                SetOutputCellText wsOutput.Cells(rowNumber, 1), updatedText
+            End If
+        End If
+    Next rowNumber
+End Sub
+
+' アウトプット②の明細対象かつ有効な名称を持つテーブルだけを辞書へ追加
+Private Sub AddMatchedOutputTwoNames( _
+    ByVal matchedNames As Object, _
+    ByVal tableIds As Collection, _
+    ByVal tableMaster As Object)
+
+    Dim tableId As Variant
+    Dim normalizedId As String
+    Dim tableRow As Variant
+    Dim tableName As String
+
+    For Each tableId In tableIds
+        normalizedId = NormalizePhysicalTableId(CStr(tableId))
+        If tableMaster.Exists(normalizedId) Then
+            tableRow = tableMaster(normalizedId)
+            tableName = CStr(tableRow(1))
+            If IsUsableJapaneseName(tableName) And Not matchedNames.Exists(normalizedId) Then
+                matchedNames.Add normalizedId, tableName
+            End If
+        End If
+    Next tableId
+End Sub
+
 ' アウトプット②の旧内容・結合・書式を消して固定見出しを配置
 Private Sub ResetOutputTwoSurface(ByVal ws As Worksheet)
     Dim clearLastRow As Long
@@ -2801,6 +2881,11 @@ End Function
 ' 和名未取得判定用の文字列を取得
 Private Function MissingNameText() As String
     MissingNameText = W(&H548C, &H540D, &H672A, &H53D6, &H5F97)
+End Function
+
+' parserが出力する参照テーブル見出しを取得
+Private Function ReferenceTablesText() As String
+    ReferenceTablesText = W(&H53C2, &H7167, &H30C6, &H30FC, &H30D6, &H30EB)
 End Function
 
 ' 解析完了メッセージを取得
