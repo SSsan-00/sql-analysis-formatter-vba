@@ -102,7 +102,7 @@ public sealed class TableUsageTests
     }
 
     [TestMethod]
-    public void Build_UpdateAndDelete_IncludeResolvedTargetInBothDirections()
+    public void Build_UpdateAndDelete_ExcludeTargetBindingFromInputs()
     {
         const string updateSql = """
             UPDATE u
@@ -120,17 +120,17 @@ public sealed class TableUsageTests
         var deletePlan = OutputSheetPlanBuilder.Build(deleteSql, []);
 
         CollectionAssert.AreEqual(
-            new[] { "users", "locations" },
+            new[] { "locations" },
             updatePlan.InputTableIds.ToArray());
         CollectionAssert.AreEqual(new[] { "users" }, updatePlan.OutputTableIds.ToArray());
         CollectionAssert.AreEqual(
-            new[] { "users", "suspended_users" },
+            new[] { "suspended_users" },
             deletePlan.InputTableIds.ToArray());
         CollectionAssert.AreEqual(new[] { "users" }, deletePlan.OutputTableIds.ToArray());
     }
 
     [TestMethod]
-    public void Build_Update_ReadsTargetOnlyWhenWhereOrNewValueReferencesIt()
+    public void Build_Update_DoesNotTreatTargetColumnsAsInputTables()
     {
         const string constantSql = "UPDATE dbo.users SET name = 'fixed';";
         const string targetValueSql = "UPDATE dbo.users SET name = name + '!';";
@@ -145,14 +145,14 @@ public sealed class TableUsageTests
 
         Assert.IsEmpty(constantPlan.InputTableIds);
         CollectionAssert.AreEqual(new[] { "users" }, constantPlan.OutputTableIds.ToArray());
-        CollectionAssert.AreEqual(new[] { "users" }, targetValuePlan.InputTableIds.ToArray());
+        Assert.IsEmpty(targetValuePlan.InputTableIds);
         CollectionAssert.AreEqual(new[] { "users" }, targetValuePlan.OutputTableIds.ToArray());
         CollectionAssert.AreEqual(new[] { "defaults" }, otherTableValuePlan.InputTableIds.ToArray());
         CollectionAssert.AreEqual(new[] { "users" }, otherTableValuePlan.OutputTableIds.ToArray());
     }
 
     [TestMethod]
-    public void Build_Update_PreservesTargetReadWhenAnotherTableColumnAppearsLater()
+    public void Build_Update_CollectsOnlyExternalSourcesFromMixedExpressions()
     {
         const string targetFirstSql = """
             UPDATE dbo.users
@@ -169,13 +169,43 @@ public sealed class TableUsageTests
         var targetLastPlan = OutputSheetPlanBuilder.Build(targetLastSql, []);
 
         CollectionAssert.AreEqual(
-            new[] { "users", "defaults" },
+            new[] { "defaults" },
             targetFirstPlan.InputTableIds.ToArray());
         CollectionAssert.AreEqual(new[] { "users" }, targetFirstPlan.OutputTableIds.ToArray());
         CollectionAssert.AreEqual(
-            new[] { "users", "defaults" },
+            new[] { "defaults" },
             targetLastPlan.InputTableIds.ToArray());
         CollectionAssert.AreEqual(new[] { "users" }, targetLastPlan.OutputTableIds.ToArray());
+    }
+
+    [TestMethod]
+    public void Build_UpdateAndDelete_IncludeIndependentSelfReferencesAsInputs()
+    {
+        const string updateSql = """
+            UPDATE dbo.users
+            SET name = (
+                SELECT TOP (1) source.name
+                FROM dbo.users AS source
+                WHERE source.id <> users.id
+            );
+            """;
+        const string deleteSql = """
+            DELETE FROM dbo.users
+            WHERE EXISTS (
+                SELECT 1
+                FROM dbo.users AS duplicate
+                WHERE duplicate.email = users.email
+                    AND duplicate.id <> users.id
+            );
+            """;
+
+        var updatePlan = OutputSheetPlanBuilder.Build(updateSql, []);
+        var deletePlan = OutputSheetPlanBuilder.Build(deleteSql, []);
+
+        CollectionAssert.AreEqual(new[] { "users" }, updatePlan.InputTableIds.ToArray());
+        CollectionAssert.AreEqual(new[] { "users" }, updatePlan.OutputTableIds.ToArray());
+        CollectionAssert.AreEqual(new[] { "users" }, deletePlan.InputTableIds.ToArray());
+        CollectionAssert.AreEqual(new[] { "users" }, deletePlan.OutputTableIds.ToArray());
     }
 
     [TestMethod]
@@ -206,11 +236,11 @@ public sealed class TableUsageTests
         CollectionAssert.AreEqual(
             new[] { "users", "audit_log" },
             insertPlan.OutputTableIds.ToArray());
-        CollectionAssert.AreEqual(new[] { "users" }, updatePlan.InputTableIds.ToArray());
+        Assert.IsEmpty(updatePlan.InputTableIds);
         CollectionAssert.AreEqual(
             new[] { "users", "audit_log" },
             updatePlan.OutputTableIds.ToArray());
-        CollectionAssert.AreEqual(new[] { "users" }, deletePlan.InputTableIds.ToArray());
+        Assert.IsEmpty(deletePlan.InputTableIds);
         CollectionAssert.AreEqual(
             new[] { "users", "audit_log" },
             deletePlan.OutputTableIds.ToArray());

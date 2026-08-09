@@ -46,31 +46,25 @@ internal static class PhysicalTableUsageCollector
             _ => null
         };
         var outputIntoTarget = specification?.OutputIntoClause?.IntoTable;
+        var targetBinding = FindTargetBinding(statement, target);
 
-        var inputCandidates = namedTables
-            .Where(table => !ReferenceEquals(table, target))
-            .Where(table => !ReferenceEquals(table, outputIntoTarget))
-            .Where(table => !IsCteReference(table, cteDefinitions))
-            .Select(table => new TableCandidate(table.StartOffset, PhysicalId(table)))
-            .Where(candidate => candidate.TableId.Length > 0)
-            .ToList();
-        if (statement is InsertStatement valuesInsertStatement &&
-            valuesInsertStatement.InsertSpecification.InsertSource is ValuesInsertSource)
+        // 更新対象そのものと、UPDATE/DELETEのFROM句で対象別名を束縛する出現は出力専用とする。
+        // 自己結合やサブクエリなど、同じ物理表の独立した出現は除外せず入力へ残す。
+        var suppressInputs = statement is InsertStatement valuesInsertStatement &&
+            valuesInsertStatement.InsertSpecification.InsertSource is ValuesInsertSource;
+        if (!suppressInputs)
         {
-            inputCandidates.Clear();
+            foreach (var table in namedTables
+                .Where(table => !ReferenceEquals(table, target))
+                .Where(table => !ReferenceEquals(table, targetBinding))
+                .Where(table => !ReferenceEquals(table, outputIntoTarget))
+                .Where(table => !IsCteReference(table, cteDefinitions)))
+            {
+                inputs.Add(PhysicalId(table));
+            }
         }
 
         var resolvedTarget = ResolveTarget(statement, target, cteDefinitions);
-        if (ShouldReadDmlTarget(statement, target) && resolvedTarget.Length > 0)
-        {
-            inputCandidates.Add(new TableCandidate(target?.StartOffset ?? statement.StartOffset, resolvedTarget));
-        }
-
-        foreach (var candidate in inputCandidates.OrderBy(candidate => candidate.StartOffset))
-        {
-            inputs.Add(candidate.TableId);
-        }
-
         switch (statement)
         {
             case SelectStatement select when select.Into is not null:
@@ -96,6 +90,31 @@ internal static class PhysicalTableUsageCollector
             InsertStatement insert => insert.InsertSpecification,
             UpdateStatement update => update.UpdateSpecification,
             DeleteStatement delete => delete.DeleteSpecification,
+            _ => null
+        };
+    }
+
+    private static TableReference? FindTargetBinding(
+        TSqlStatement statement,
+        TableReference? target)
+    {
+        if (target is not NamedTableReference namedTarget ||
+            namedTarget.SchemaObject.Identifiers.Count != 1)
+        {
+            return null;
+        }
+
+        return FindTableReferenceByAlias(
+            GetModificationFromClause(statement)?.TableReferences,
+            PhysicalId(namedTarget));
+    }
+
+    private static FromClause? GetModificationFromClause(TSqlStatement statement)
+    {
+        return statement switch
+        {
+            UpdateStatement update => update.UpdateSpecification.FromClause,
+            DeleteStatement delete => delete.DeleteSpecification.FromClause,
             _ => null
         };
     }
@@ -147,13 +166,9 @@ internal static class PhysicalTableUsageCollector
             return ResolveUniquePhysicalTable(cte.QueryExpression, cteDefinitions);
         }
 
-        var fromClause = statement switch
-        {
-            UpdateStatement update => update.UpdateSpecification.FromClause,
-            DeleteStatement delete => delete.DeleteSpecification.FromClause,
-            _ => null
-        };
-        var aliasMatch = FindTableReferenceByAlias(fromClause?.TableReferences, targetId);
+        var aliasMatch = FindTableReferenceByAlias(
+            GetModificationFromClause(statement)?.TableReferences,
+            targetId);
         if (aliasMatch is not null)
         {
             return ResolveTableReference(aliasMatch, cteDefinitions);
@@ -307,55 +322,6 @@ internal static class PhysicalTableUsageCollector
         }
     }
 
-    private static bool ShouldReadDmlTarget(
-        TSqlStatement statement,
-        TableReference? target)
-    {
-        return statement switch
-        {
-            UpdateStatement update =>
-                update.UpdateSpecification.WhereClause is not null ||
-                UpdateNewValuesReadTarget(update.UpdateSpecification.SetClauses, target),
-            DeleteStatement delete => delete.DeleteSpecification.WhereClause is not null,
-            _ => false
-        };
-    }
-
-    private static bool UpdateNewValuesReadTarget(
-        IEnumerable<SetClause> setClauses,
-        TableReference? target)
-    {
-        var targetNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (target is NamedTableReference namedTarget)
-        {
-            targetNames.Add(PhysicalId(namedTarget));
-            if (namedTarget.Alias is not null)
-            {
-                targetNames.Add(namedTarget.Alias.Value);
-            }
-        }
-
-        foreach (var assignment in setClauses.OfType<AssignmentSetClause>())
-        {
-            if (assignment.AssignmentKind != AssignmentKind.Equals)
-            {
-                return true;
-            }
-
-            if (assignment.NewValue is not null)
-            {
-                var visitor = new TargetColumnReferenceVisitor(targetNames);
-                assignment.NewValue.Accept(visitor);
-                if (visitor.Found)
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
     private sealed class CommonTableExpressionCollector : TSqlFragmentVisitor
     {
         public Dictionary<string, CommonTableExpression> Definitions { get; } =
@@ -388,54 +354,6 @@ internal static class PhysicalTableUsageCollector
         }
     }
 
-    private sealed class TargetColumnReferenceVisitor : TSqlFragmentVisitor
-    {
-        private readonly IReadOnlySet<string> targetNames;
-        private int scalarSubqueryDepth;
-
-        public TargetColumnReferenceVisitor(IReadOnlySet<string> targetNames)
-        {
-            this.targetNames = targetNames;
-        }
-
-        public bool Found { get; private set; }
-
-        public override void ExplicitVisit(ScalarSubquery node)
-        {
-            scalarSubqueryDepth++;
-            base.ExplicitVisit(node);
-            scalarSubqueryDepth--;
-        }
-
-        public override void ExplicitVisit(ColumnReferenceExpression node)
-        {
-            if (Found)
-            {
-                return;
-            }
-
-            var identifiers = node.MultiPartIdentifier?.Identifiers;
-            if (identifiers is null || identifiers.Count == 0)
-            {
-                return;
-            }
-
-            if (identifiers.Count == 1)
-            {
-                if (scalarSubqueryDepth == 0)
-                {
-                    Found = true;
-                }
-                return;
-            }
-
-            if (targetNames.Contains(identifiers[^2].Value))
-            {
-                Found = true;
-            }
-        }
-    }
-
     private sealed class OrderedTableIds
     {
         private readonly HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
@@ -452,6 +370,4 @@ internal static class PhysicalTableUsageCollector
             }
         }
     }
-
-    private sealed record TableCandidate(int StartOffset, string TableId);
 }

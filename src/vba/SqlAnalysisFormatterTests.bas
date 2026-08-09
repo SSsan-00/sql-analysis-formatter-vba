@@ -23,6 +23,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_ConvertsTsqlFunctionFixtures
     AnalyzeQueries_ProcessesQueriesWithoutMappings
     AnalyzeQueries_RendersMatchedInputAndOutputTables
+    AnalyzeQueries_ClassifiesModificationTargetsByRole
     AnalyzeQueries_UsesOutputTwoNameForExactMissingReference
     AnalyzeQueries_RendersSupportedTablesDuringPartialFallback
     AnalyzeQueries_SortsOutputTwoByCompositeTableNumber
@@ -356,6 +357,53 @@ Public Sub AnalyzeQueries_RendersMatchedInputAndOutputTables()
     AssertDataBlock wsOutput.Range("BS4:CQ4")
     AssertDataBlock wsOutput.Range("CR4:CV4")
     AssertBlankSeparatorRange wsOutput.Range("AW1:AZ6")
+    wsTableList.Range("A2:C200").ClearContents
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' UPDATEの対象行セットを入力から除外し、独立した自己参照だけを入力へ含めることを確認
+Public Sub AnalyzeQueries_ClassifiesModificationTargetsByRole()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim wsTableList As Worksheet
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetTwoName())
+    Set wsTableList = ThisWorkbook.Worksheets(TableListSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsTableList.Range("A2:C200").ClearContents
+    PutTableListRow wsTableList, 2, "locations", "location master", "1-1"
+    PutTableListRow wsTableList, 3, "users", "user master", "2-1"
+    wsSql.Cells(2, COL_SQL).Value = _
+        "UPDATE u SET location_name = l.name " & _
+        "FROM users AS u JOIN locations AS l ON l.id = u.location_id;"
+
+    AnalyzeQueries False
+
+    AssertOutputTwoRow wsOutput, 4, 1, "locations", "location master", "1-1"
+    AssertCellValue wsOutput.Range("C5"), ""
+    AssertOutputTwoRow wsOutput, 4, 53, "users", "user master", "2-1"
+    AssertCellValue wsOutput.Range("BC5"), ""
+
+    wsSql.Range("A2:Z200").ClearContents
+    wsSql.Cells(2, COL_SQL).Value = _
+        "UPDATE users SET name = " & _
+        "(SELECT TOP (1) source.name FROM users AS source " & _
+        "WHERE source.id <> users.id);"
+
+    AnalyzeQueries False
+
+    AssertOutputTwoRow wsOutput, 4, 1, "users", "user master", "2-1"
+    AssertCellValue wsOutput.Range("C5"), ""
+    AssertOutputTwoRow wsOutput, 4, 53, "users", "user master", "2-1"
+    AssertCellValue wsOutput.Range("BC5"), ""
     wsTableList.Range("A2:C200").ClearContents
 End Sub
 
@@ -824,7 +872,7 @@ Public Sub AnalyzeQueries_PreservesUnmatchedTemporaryTableDefinition()
 
     AssertCellValue wsOutput.Cells(3, 17), "tb1." & allFieldsText
     AssertCellValue wsOutput.Cells(6, 1), _
-        ReferenceTablesText() & ": " & missingNameText & W(&H3001) & _
+        ReferenceTablesText() & ": " & missingNameText & "[#wkuser]" & W(&H3001) & _
         UserTableText() & "[tb1]"
     AssertCellValue wsOutput.Cells(8, 1), allFieldsText
     AssertCellValue wsOutput.Cells(8, 19), "tb1." & allFieldsText

@@ -2957,8 +2957,42 @@ public sealed class OutputSheetPlanBuilderTests
         var transferTitleRow = plan.Cells.Single(cell =>
             cell.Column == 1 && cell.Value == "＜データ移送表＞").Row;
         Assert.AreEqual(
-            "参照テーブル: (和名未取得)、ユーザー[tb1]",
+            "参照テーブル: (和名未取得)[#wkuser]、ユーザー[tb1]",
             CellValue(plan, transferTitleRow + 1, 1));
+    }
+
+    /// <summary>
+    /// INSERTの移送先を和名解決できない場合も物理テーブルIDを参照表示へ残すことを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_InsertTargetsRetainPhysicalIdsWhenNamesAreMissing()
+    {
+        const string insertSelectSql = """
+            INSERT INTO dbo.audit_log(user_id)
+            SELECT u.id FROM dbo.users AS u;
+            """;
+        const string insertValuesSql = """
+            INSERT INTO dbo.audit_log(message)
+            VALUES ('completed');
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("u", "ユーザー", "", "")
+        ];
+
+        var selectPlan = OutputSheetPlanBuilder.Build(insertSelectSql, mappings);
+        var valuesPlan = OutputSheetPlanBuilder.Build(insertValuesSql, []);
+        var selectTransferTitleRow = selectPlan.Cells.Single(cell =>
+            cell.Column == 1 && cell.Value == "＜データ移送表＞").Row;
+        var valuesTransferTitleRow = valuesPlan.Cells.Single(cell =>
+            cell.Column == 1 && cell.Value == "＜データ移送表＞").Row;
+
+        Assert.AreEqual(
+            "参照テーブル: (和名未取得)[audit_log]、ユーザー[u]",
+            CellValue(selectPlan, selectTransferTitleRow + 1, 1));
+        Assert.AreEqual(
+            "参照テーブル: (和名未取得)[audit_log]",
+            CellValue(valuesPlan, valuesTransferTitleRow + 1, 1));
     }
 
     /// <summary>
@@ -3792,7 +3826,7 @@ public sealed class OutputSheetPlanBuilderTests
         var unmatchedTransferTitleRow = unmatchedPlan.Cells.Single(cell =>
             cell.Column == 1 && cell.Value == "＜データ移送表＞").Row;
         Assert.AreEqual(
-            "参照テーブル: (和名未取得)、ユーザー[tb1]",
+            "参照テーブル: (和名未取得)[#wkuser]、ユーザー[tb1]",
             CellValue(unmatchedPlan, unmatchedTransferTitleRow + 1, 1));
     }
 

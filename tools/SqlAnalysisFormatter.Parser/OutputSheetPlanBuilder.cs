@@ -88,6 +88,7 @@ public static class OutputSheetPlanBuilder
             return new QualificationResult(sql, []);
         }
 
+        ColumnQualificationIndex? mappingIndex = null;
         var insertions = new Dictionary<int, QualificationInsertion>();
         foreach (var query in QuerySpecificationCollector.Collect(script))
         {
@@ -103,11 +104,23 @@ public static class OutputSheetPlanBuilder
             {
                 foreach (var column in ColumnReferenceCollector.Collect(scalar.Expression))
                 {
+                    var identifiers = column.MultiPartIdentifier?.Identifiers;
+                    if (identifiers is null || identifiers.Count != 1)
+                    {
+                        continue;
+                    }
+
+                    mappingIndex ??= new ColumnQualificationIndex(mappings);
+                    if (mappingIndex.IsEmpty)
+                    {
+                        return new QualificationResult(sql, []);
+                    }
+
                     var qualifier = ResolveUniqueColumnQualifier(
                         sql,
-                        column,
+                        identifiers[0].Value,
                         namedTables,
-                        mappings);
+                        mappingIndex);
                     if (qualifier is not null)
                     {
                         var originalValue = FragmentText(sql, column);
@@ -125,18 +138,37 @@ public static class OutputSheetPlanBuilder
             }
         }
 
-        var result = sql;
-        foreach (var insertion in insertions.OrderByDescending(item => item.Key))
-        {
-            result = result.Insert(insertion.Key, insertion.Value.Prefix);
-        }
+        var orderedInsertions = insertions.OrderBy(item => item.Key).ToArray();
         return new QualificationResult(
-            result,
-            insertions
-                .OrderBy(item => item.Value.Qualification.QueryLine)
-                .ThenBy(item => item.Value.Qualification.Order)
+            ApplyQualificationInsertions(sql, orderedInsertions),
+            orderedInsertions
                 .Select(item => item.Value.Qualification)
                 .ToArray());
+    }
+
+    /// <summary>
+    /// 元SQLのオフセットを保ったまま、全修飾子を1回の走査で挿入
+    /// </summary>
+    private static string ApplyQualificationInsertions(
+        string sql,
+        IReadOnlyList<KeyValuePair<int, QualificationInsertion>> insertions)
+    {
+        if (insertions.Count == 0)
+        {
+            return sql;
+        }
+
+        var addedLength = insertions.Sum(item => item.Value.Prefix.Length);
+        var result = new StringBuilder(sql.Length + addedLength);
+        var sourceOffset = 0;
+        foreach (var insertion in insertions)
+        {
+            result.Append(sql, sourceOffset, insertion.Key - sourceOffset);
+            result.Append(insertion.Value.Prefix);
+            sourceOffset = insertion.Key;
+        }
+        result.Append(sql, sourceOffset, sql.Length - sourceOffset);
+        return result.ToString();
     }
 
     /// <summary>
@@ -144,24 +176,12 @@ public static class OutputSheetPlanBuilder
     /// </summary>
     private static string? ResolveUniqueColumnQualifier(
         string sql,
-        ColumnReferenceExpression column,
+        string fieldId,
         IReadOnlyList<NamedTableReference> namedTables,
-        IReadOnlyList<MappingDefinition> mappings)
+        ColumnQualificationIndex mappingIndex)
     {
-        var identifiers = column.MultiPartIdentifier?.Identifiers;
-        if (identifiers is null || identifiers.Count != 1)
-        {
-            return null;
-        }
-
-        var fieldId = identifiers[0].Value;
         var candidates = namedTables
-            .Where(table => mappings.Any(mapping =>
-                MappingAssociatesColumnWithTable(
-                    mapping,
-                    fieldId,
-                    table,
-                    mappings)))
+            .Where(table => mappingIndex.AssociatesWithTable(fieldId, table))
             .DistinctBy(
                 table => table.Alias?.Value ?? table.SchemaObject.BaseIdentifier.Value,
                 StringComparer.OrdinalIgnoreCase)
@@ -174,65 +194,6 @@ public static class OutputSheetPlanBuilder
 
         var identifier = candidates[0].Alias ?? candidates[0].SchemaObject.BaseIdentifier;
         return FragmentText(sql, identifier);
-    }
-
-    /// <summary>
-    /// 列定義がA列で直接、またはハイフン行のB列を介してFROMテーブルへ所属するか判定
-    /// </summary>
-    private static bool MappingAssociatesColumnWithTable(
-        MappingDefinition mapping,
-        string fieldId,
-        NamedTableReference table,
-        IReadOnlyList<MappingDefinition> mappings)
-    {
-        if (!MappingFieldMatches(mapping, fieldId))
-        {
-            return false;
-        }
-
-        if (MappingBelongsToTable(mapping, table))
-        {
-            return true;
-        }
-
-        if (mapping.TableId != "-" || !IsUsableTableName(mapping.TableName))
-        {
-            return false;
-        }
-
-        return mappings.Any(anchor =>
-            anchor.TableId != "-" &&
-            IsUsableTableName(anchor.TableName) &&
-            string.Equals(
-                anchor.TableName.Trim(),
-                mapping.TableName.Trim(),
-                StringComparison.OrdinalIgnoreCase) &&
-            MappingBelongsToTable(anchor, table));
-    }
-
-    /// <summary>
-    /// B列の値をテーブル所属の照合に使用できるか判定
-    /// </summary>
-    private static bool IsUsableTableName(string tableName)
-    {
-        var value = tableName.Trim();
-        return value.Length > 0 &&
-            value != "-" &&
-            !value.Contains(MissingName, StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// 変換定義の物理名、和名、parser用IDのいずれかが列IDと一致するか判定
-    /// </summary>
-    private static bool MappingFieldMatches(MappingDefinition mapping, string fieldId)
-    {
-        return string.Equals(mapping.FieldId, fieldId, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(mapping.FieldName, fieldId, StringComparison.OrdinalIgnoreCase) ||
-            (mapping.ParserFieldId.Length > 0 &&
-                string.Equals(
-                    mapping.ParserFieldId,
-                    fieldId,
-                    StringComparison.OrdinalIgnoreCase));
     }
 
     private static OutputSheetPlan BuildStatement(
@@ -320,7 +281,7 @@ public static class OutputSheetPlanBuilder
             mappings);
         var targetName = ResolveTableName(targetId, mappings);
         var references = BuildTransferTableReferences(
-            targetName,
+            BuildTargetDisplay(targetName, targetId, targetId, includeIdentifier: false),
             BuildSelectTableDisplays(
                 sourceQuery,
                 mappings,
@@ -1044,8 +1005,30 @@ public static class OutputSheetPlanBuilder
             return MissingName;
         }
 
-        var tableId = named.Alias?.Value ?? named.SchemaObject.BaseIdentifier.Value;
+        var physicalTableId = named.SchemaObject.BaseIdentifier.Value;
+        var tableId = named.Alias?.Value ?? physicalTableId;
         var tableName = ResolveTableName(named, mappings);
+        return BuildTargetDisplay(
+            tableName,
+            tableId,
+            physicalTableId,
+            includeIdentifier);
+    }
+
+    /// <summary>
+    /// 移送先の和名が未取得でも識別可能な物理テーブルIDを保持
+    /// </summary>
+    private static string BuildTargetDisplay(
+        string tableName,
+        string tableId,
+        string physicalTableId,
+        bool includeIdentifier)
+    {
+        if (tableName == MissingName)
+        {
+            return $"{MissingName}[{physicalTableId}]";
+        }
+
         return includeIdentifier ? $"{tableName}[{tableId}]" : tableName;
     }
 
@@ -4156,6 +4139,103 @@ public static class OutputSheetPlanBuilder
         string Name,
         IReadOnlyList<string> SourceTexts,
         Regex ParenthesizedNamePattern);
+
+    /// <summary>
+    /// 未修飾列の候補を、列IDとテーブル和名の索引から解決
+    /// </summary>
+    private sealed class ColumnQualificationIndex
+    {
+        private readonly Dictionary<string, List<MappingDefinition>> mappingsByField =
+            new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, HashSet<string>> anchoredTableIdsByName =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        public ColumnQualificationIndex(IReadOnlyList<MappingDefinition> mappings)
+        {
+            foreach (var mapping in mappings)
+            {
+                AddFieldMappings(mapping);
+                AddTableNameAnchor(mapping);
+            }
+        }
+
+        public bool IsEmpty => mappingsByField.Count == 0;
+
+        public bool AssociatesWithTable(string fieldId, NamedTableReference table)
+        {
+            if (!mappingsByField.TryGetValue(fieldId, out var candidates))
+            {
+                return false;
+            }
+
+            return candidates.Any(mapping =>
+                MappingBelongsToTable(mapping, table) ||
+                StandaloneMappingBelongsToTable(mapping, table));
+        }
+
+        private void AddFieldMappings(MappingDefinition mapping)
+        {
+            var fieldKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            AddFieldKey(fieldKeys, mapping.FieldId);
+            AddFieldKey(fieldKeys, mapping.FieldName);
+            AddFieldKey(fieldKeys, mapping.ParserFieldId);
+            foreach (var fieldKey in fieldKeys)
+            {
+                if (!mappingsByField.TryGetValue(fieldKey, out var fieldMappings))
+                {
+                    fieldMappings = [];
+                    mappingsByField.Add(fieldKey, fieldMappings);
+                }
+                fieldMappings.Add(mapping);
+            }
+        }
+
+        private static void AddFieldKey(ISet<string> fieldKeys, string fieldKey)
+        {
+            if (fieldKey.Length > 0)
+            {
+                fieldKeys.Add(fieldKey);
+            }
+        }
+
+        private void AddTableNameAnchor(MappingDefinition mapping)
+        {
+            if (mapping.TableId == "-" || !IsUsableTableName(mapping.TableName))
+            {
+                return;
+            }
+
+            var tableName = mapping.TableName.Trim();
+            if (!anchoredTableIdsByName.TryGetValue(tableName, out var tableIds))
+            {
+                tableIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                anchoredTableIdsByName.Add(tableName, tableIds);
+            }
+            tableIds.Add(mapping.TableId);
+        }
+
+        private bool StandaloneMappingBelongsToTable(
+            MappingDefinition mapping,
+            NamedTableReference table)
+        {
+            if (mapping.TableId != "-" || !IsUsableTableName(mapping.TableName) ||
+                !anchoredTableIdsByName.TryGetValue(mapping.TableName.Trim(), out var tableIds))
+            {
+                return false;
+            }
+
+            return tableIds.Contains(table.Alias?.Value ?? string.Empty) ||
+                tableIds.Contains(table.SchemaObject.BaseIdentifier.Value);
+        }
+
+        private static bool IsUsableTableName(string tableName)
+        {
+            var value = tableName.Trim();
+            return value.Length > 0 &&
+                value != "-" &&
+                !value.Contains(MissingName, StringComparison.Ordinal);
+        }
+    }
 
     private sealed record QualificationInsertion(
         string Prefix,
