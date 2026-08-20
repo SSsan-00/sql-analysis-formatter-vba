@@ -16,7 +16,15 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     SetupWorkbook_CreatesOutputSheet
     SetupWorkbook_CreatesOutputTwoLayout
     SetupWorkbook_CreatesStableSqlActionButtons
+    SetupWorkbook_ProvidesToastForm
     SetupWorkbook_TracksMissingNameFillColor
+    CompletionToast_UsesTwoSecondDuration
+    CompletionToast_ShowsWithoutChangingSelection
+    CompletionToast_ReplacesExistingNotification
+    CompletionToast_DismissesImmediately
+    CompletionToast_AutoDismissesAfterTwoSeconds
+    AnalyzeQueries_ShowsCompletionToastOnSuccess
+    AnalyzeQueries_ShowMessageFalseDoesNotShowToast
     CopyOutput_CopiesRenderedRange
     CopyOutputTwo_CopiesRenderedRange
     AnalyzeQueries_ConvertsCrudFixtures
@@ -52,6 +60,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_RestoresSqlActionButtonsAfterLargeInput
     AnalyzeQueries_RestoresApplicationStateAfterOutputError
     ClearConfirmMessage_UsesAnalysisResultWording
+    ClearData_ShowMessageFalseDismissesExistingToast
     ClearData_ClearsOutputSheet
     ClearData_InitializesOutputTwoAndPreservesTableList
     ClearData_RestoresSqlActionButtons
@@ -65,6 +74,201 @@ TestFail:
     If showMessage Then
         MsgBox Err.Description, vbCritical
     End If
+    Err.Raise Err.Number, Err.Source, Err.Description
+End Sub
+
+'@TestMethod("SetupWorkbook")
+' 完了通知用のモードレスUserFormが配布ブックに組み込まれていることを確認
+Public Sub SetupWorkbook_ProvidesToastForm()
+    Dim toastComponent As Object
+
+    On Error Resume Next
+    Set toastComponent = ThisWorkbook.VBProject.VBComponents.Item("SqlAnalysisToast")
+    On Error GoTo 0
+
+    If toastComponent Is Nothing Then
+        Fail "SqlAnalysisToast form is missing from the workbook."
+    End If
+    If CLng(toastComponent.Type) <> 3 Then
+        Fail "SqlAnalysisToast should be a VBA UserForm."
+    End If
+End Sub
+
+'@TestMethod("CompletionToast")
+Public Sub CompletionToast_UsesTwoSecondDuration()
+    If SqlAnalysisToastManager.ToastDurationSeconds() <> 2 Then
+        Fail "Completion toast duration should be two seconds."
+    End If
+End Sub
+
+'@TestMethod("CompletionToast")
+Public Sub CompletionToast_ShowsWithoutChangingSelection()
+    Dim wsSql As Worksheet
+    Dim selectedAddress As String
+    Dim message As String
+
+    On Error GoTo TestFail
+    SetupWorkbook
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    wsSql.Activate
+    wsSql.Range("D10").Select
+    selectedAddress = ActiveCell.Address
+    message = "Toast focus test"
+
+    SqlAnalysisToastManager.ShowToast message
+
+    If Not ActiveSheet Is wsSql Then
+        Fail "Completion toast should not change the active sheet."
+    End If
+    If ActiveCell.Address <> selectedAddress Then
+        Fail "Completion toast should not change the selected cell."
+    End If
+    If Not SqlAnalysisToastManager.ToastIsVisible() Then
+        Fail "Completion toast should be visible after ShowToast."
+    End If
+    If SqlAnalysisToastManager.CurrentToastMessage() <> message Then
+        Fail "Completion toast should expose the displayed message."
+    End If
+    If Not SqlAnalysisToastManager.ToastWindowStyleIsValid() Then
+        Fail "Completion toast should be borderless and must not activate itself."
+    End If
+
+TestCleanUp:
+    SqlAnalysisToastManager.DismissToast
+    Exit Sub
+
+TestFail:
+    SqlAnalysisToastManager.DismissToast
+    Err.Raise Err.Number, Err.Source, Err.Description
+End Sub
+
+'@TestMethod("CompletionToast")
+Public Sub CompletionToast_ReplacesExistingNotification()
+    Dim firstDismissalTime As Date
+    Dim secondDismissalTime As Date
+    Dim restartAt As Date
+
+    On Error GoTo TestFail
+    SqlAnalysisToastManager.DismissToast
+
+    SqlAnalysisToastManager.ShowToast "First toast"
+    firstDismissalTime = SqlAnalysisToastManager.CurrentToastDismissalTime()
+    restartAt = DateAdd("s", 1, Now)
+    Do While Now < restartAt
+        DoEvents
+    Loop
+    SqlAnalysisToastManager.ShowToast "Second toast"
+    secondDismissalTime = SqlAnalysisToastManager.CurrentToastDismissalTime()
+
+    If VBA.UserForms.Count <> 1 Then
+        Fail "Repeated completion notices should reuse one toast form."
+    End If
+    If SqlAnalysisToastManager.CurrentToastMessage() <> "Second toast" Then
+        Fail "Repeated completion notices should replace the displayed message."
+    End If
+    If secondDismissalTime <= firstDismissalTime Then
+        Fail "Repeated completion notices should restart the two-second timer."
+    End If
+
+TestCleanUp:
+    SqlAnalysisToastManager.DismissToast
+    Exit Sub
+
+TestFail:
+    SqlAnalysisToastManager.DismissToast
+    Err.Raise Err.Number, Err.Source, Err.Description
+End Sub
+
+'@TestMethod("CompletionToast")
+Public Sub CompletionToast_DismissesImmediately()
+    SqlAnalysisToastManager.ShowToast "Dismiss toast"
+    SqlAnalysisToastManager.DismissToast
+
+    If SqlAnalysisToastManager.ToastIsVisible() Then
+        Fail "DismissToast should immediately hide the completion toast."
+    End If
+    If VBA.UserForms.Count <> 0 Then
+        Fail "DismissToast should unload the completion toast form."
+    End If
+End Sub
+
+'@TestMethod("CompletionToast")
+Public Sub CompletionToast_AutoDismissesAfterTwoSeconds()
+    Dim timeoutAt As Date
+
+    On Error GoTo TestFail
+    SqlAnalysisToastManager.ShowToast "Auto dismiss toast"
+    timeoutAt = DateAdd("s", 4, Now)
+    Do While SqlAnalysisToastManager.ToastIsVisible() And Now < timeoutAt
+        DoEvents
+    Loop
+
+    If SqlAnalysisToastManager.ToastIsVisible() Then
+        Fail "Completion toast should automatically close after two seconds."
+    End If
+    Exit Sub
+
+TestFail:
+    SqlAnalysisToastManager.DismissToast
+    Err.Raise Err.Number, Err.Source, Err.Description
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+Public Sub AnalyzeQueries_ShowMessageFalseDoesNotShowToast()
+    Dim wsSql As Worksheet
+
+    SetupWorkbook
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    wsSql.Range("A2:Z20").ClearContents
+    SqlAnalysisToastManager.ShowToast "Existing toast"
+
+    AnalyzeQueries False
+
+    If SqlAnalysisToastManager.ToastIsVisible() Then
+        Fail "AnalyzeQueries False should not display a completion toast."
+    End If
+End Sub
+
+'@TestMethod("ClearData")
+Public Sub ClearData_ShowMessageFalseDismissesExistingToast()
+    SetupWorkbook
+    SqlAnalysisToastManager.ShowToast "Existing toast"
+
+    ClearData False
+
+    If SqlAnalysisToastManager.ToastIsVisible() Then
+        Fail "ClearData False should dismiss an existing completion toast."
+    End If
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+Public Sub AnalyzeQueries_ShowsCompletionToastOnSuccess()
+    Dim wsSql As Worksheet
+    Dim expectedMessage As String
+
+    On Error GoTo TestFail
+    SqlAnalysisToastManager.DismissToast
+    SetupWorkbook
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    wsSql.Range("A2:Z20").ClearContents
+    expectedMessage = W(&H89E3, &H6790, &H304C, &H5B8C, &H4E86, _
+        &H3057, &H307E, &H3057, &H305F, &H3002)
+
+    AnalyzeQueries True
+
+    If Not SqlAnalysisToastManager.ToastIsVisible() Then
+        Fail "Successful analysis should display a completion toast."
+    End If
+    If SqlAnalysisToastManager.CurrentToastMessage() <> expectedMessage Then
+        Fail "Successful analysis should display the analysis completion message."
+    End If
+
+TestCleanUp:
+    SqlAnalysisToastManager.DismissToast
+    Exit Sub
+
+TestFail:
+    SqlAnalysisToastManager.DismissToast
     Err.Raise Err.Number, Err.Source, Err.Description
 End Sub
 

@@ -9,6 +9,12 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $workbookPath = Join-Path $repoRoot 'SqlAnalysisFormatter.xlsm'
 $mainModulePath = Join-Path $repoRoot 'src\vba\SqlAnalysisFormatter.bas'
+$productionComponents = @(
+    @{ Name = 'SqlAnalysisToastEvents'; Path = Join-Path $repoRoot 'src\vba\SqlAnalysisToastEvents.cls' },
+    @{ Name = 'SqlAnalysisToastManager'; Path = Join-Path $repoRoot 'src\vba\SqlAnalysisToastManager.bas' },
+    @{ Name = 'SqlAnalysisToast'; Path = Join-Path $repoRoot 'src\vba\SqlAnalysisToast.frm' },
+    @{ Name = 'SqlAnalysisFormatter'; Path = $mainModulePath }
+)
 $testModulePath = Join-Path $repoRoot 'src\vba\SqlAnalysisFormatterTests.bas'
 $tempWorkbookPath = Join-Path $env:TEMP ('SqlAnalysisFormatter_Tests_' + [guid]::NewGuid().ToString('N') + '.xlsm')
 $previousParserExePath = $env:SQL_ANALYSIS_FORMATTER_PARSER_EXE
@@ -20,6 +26,38 @@ function Release-ComObject {
         [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($ComObject) | Out-Null
     }
 }
+
+function Assert-ToastNotificationSourceContract {
+    $source = Get-Content -LiteralPath $mainModulePath -Encoding UTF8 -Raw
+    foreach ($requiredPattern in @(
+        'SqlAnalysisToastManager\.ShowToast\s+AnalyzeDoneMessage\(\)',
+        'SqlAnalysisToastManager\.ShowToast\s+ClearDoneMessage\(\)')) {
+        if ($source -notmatch $requiredPattern) {
+            throw "Completion toast call is missing from SqlAnalysisFormatter.bas: $requiredPattern"
+        }
+    }
+    foreach ($forbiddenPattern in @(
+        'MsgBox\s+AnalyzeDoneMessage\(\)',
+        'MsgBox\s+ClearDoneMessage\(\)')) {
+        if ($source -match $forbiddenPattern) {
+            throw "Blocking completion dialog remains in SqlAnalysisFormatter.bas: $forbiddenPattern"
+        }
+    }
+    foreach ($preservedPattern in @(
+        'MsgBox\s+DuplicateTableWarningMessage\(duplicateTableIds\),\s*vbExclamation',
+        'MsgBox\s+AnalyzeFallbackMessage\(fallbackReason\),\s*vbExclamation',
+        'MsgBox\s*\(ClearConfirmMessage\(\),\s*vbQuestion')) {
+        if ($source -notmatch $preservedPattern) {
+            throw "Required warning or confirmation dialog was removed: $preservedPattern"
+        }
+    }
+    $errorRaisePattern = 'Err\.Raise\s+errorNumber,\s*errorSource,\s*errorDescription'
+    if ([regex]::Matches($source, $errorRaisePattern).Count -lt 2) {
+        throw 'AnalyzeQueries or ClearData no longer propagates execution errors.'
+    }
+}
+
+Assert-ToastNotificationSourceContract
 
 Copy-Item -LiteralPath $workbookPath -Destination $tempWorkbookPath -Force
 
@@ -47,7 +85,7 @@ try {
 
     $modulesToRemove = @('SqlAnalysisFormatterTests')
     if (-not $UseEmbeddedMainModule) {
-        $modulesToRemove += 'SqlAnalysisFormatter'
+        $modulesToRemove += @($productionComponents.Name)
     }
     foreach ($moduleName in $modulesToRemove) {
         $existingComponent = $null
@@ -61,8 +99,10 @@ try {
     }
 
     if (-not $UseEmbeddedMainModule) {
-        $importedComponent = $components.Import($mainModulePath)
-        Release-ComObject $importedComponent
+        foreach ($productionComponent in $productionComponents) {
+            $importedComponent = $components.Import($productionComponent.Path)
+            Release-ComObject $importedComponent
+        }
     }
     $importedComponent = $components.Import($testModulePath)
     Release-ComObject $importedComponent
@@ -70,7 +110,15 @@ try {
         'SetupWorkbook_CreatesOutputSheet',
         'SetupWorkbook_CreatesOutputTwoLayout',
         'SetupWorkbook_CreatesStableSqlActionButtons',
+        'SetupWorkbook_ProvidesToastForm',
         'SetupWorkbook_TracksMissingNameFillColor',
+        'CompletionToast_UsesTwoSecondDuration',
+        'CompletionToast_ShowsWithoutChangingSelection',
+        'CompletionToast_ReplacesExistingNotification',
+        'CompletionToast_DismissesImmediately',
+        'CompletionToast_AutoDismissesAfterTwoSeconds',
+        'AnalyzeQueries_ShowsCompletionToastOnSuccess',
+        'AnalyzeQueries_ShowMessageFalseDoesNotShowToast',
         'CopyOutput_CopiesRenderedRange',
         'CopyOutputTwo_CopiesRenderedRange',
         'AnalyzeQueries_ConvertsCrudFixtures',
@@ -106,6 +154,7 @@ try {
         'AnalyzeQueries_RestoresSqlActionButtonsAfterLargeInput',
         'AnalyzeQueries_RestoresApplicationStateAfterOutputError',
         'ClearConfirmMessage_UsesAnalysisResultWording',
+        'ClearData_ShowMessageFalseDismissesExistingToast',
         'ClearData_ClearsOutputSheet',
         'ClearData_InitializesOutputTwoAndPreservesTableList',
         'ClearData_RestoresSqlActionButtons'

@@ -1,0 +1,6 @@
+src/vba/*.bas text eol=crlf
+src/vba/*.cls text eol=crlf
+src/vba/*.frm text eol=crlf
+src/vba/*.frx binary
+*.xlsm binary
+*.xlsx binary

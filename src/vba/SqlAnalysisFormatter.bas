@@ -102,6 +102,7 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     Dim analysisOutputReset As Boolean
 
     On Error GoTo AnalyzeFail
+    SqlAnalysisToastManager.DismissToast
 
     previousScreenUpdating = Application.ScreenUpdating
     previousEnableEvents = Application.EnableEvents
@@ -250,7 +251,7 @@ AnalyzeCleanUp:
         If Len(fallbackReason) > 0 Then
             MsgBox AnalyzeFallbackMessage(fallbackReason), vbExclamation
         Else
-            MsgBox AnalyzeDoneMessage(), vbInformation
+            SqlAnalysisToastManager.ShowToast AnalyzeDoneMessage()
         End If
     End If
     Exit Sub
@@ -272,6 +273,8 @@ Public Sub ClearData(Optional ByVal showMessage As Boolean = True)
     Dim errorNumber As Long
     Dim errorSource As String
     Dim errorDescription As String
+
+    SqlAnalysisToastManager.DismissToast
 
     If showMessage Then
         If MsgBox(ClearConfirmMessage(), vbQuestion + vbYesNo + vbDefaultButton2, ConfirmTitle()) <> vbYes Then
@@ -300,7 +303,7 @@ Public Sub ClearData(Optional ByVal showMessage As Boolean = True)
     EnsureSqlActionButtons wsSql
     RestoreFindSearchOrderByRows wsSql
     If showMessage Then
-        MsgBox ClearDoneMessage(), vbInformation
+        SqlAnalysisToastManager.ShowToast ClearDoneMessage()
     End If
     Exit Sub
 

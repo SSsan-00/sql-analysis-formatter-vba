@@ -17,6 +17,12 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $workbookPath = Join-Path $repoRoot 'SqlAnalysisFormatter.xlsm'
 $mainModulePath = Join-Path $repoRoot 'src\vba\SqlAnalysisFormatter.bas'
+$productionComponents = @(
+    @{ Name = 'SqlAnalysisToastEvents'; Path = Join-Path $repoRoot 'src\vba\SqlAnalysisToastEvents.cls' },
+    @{ Name = 'SqlAnalysisToastManager'; Path = Join-Path $repoRoot 'src\vba\SqlAnalysisToastManager.bas' },
+    @{ Name = 'SqlAnalysisToast'; Path = Join-Path $repoRoot 'src\vba\SqlAnalysisToast.frm' },
+    @{ Name = 'SqlAnalysisFormatter'; Path = $mainModulePath }
+)
 $parserPath = (Resolve-Path (Join-Path $repoRoot $ParserExePath)).Path
 $tempWorkbookPath = Join-Path $env:TEMP (
     'SqlAnalysisFormatter_LargeSql_' + [guid]::NewGuid().ToString('N') + '.xlsm')
@@ -86,13 +92,21 @@ try {
     if (-not $UseEmbeddedMainModule) {
         $vbProject = $workbook.VBProject
         $components = $vbProject.VBComponents
-        $existingComponent = $components.Item('SqlAnalysisFormatter')
-        $components.Remove($existingComponent)
-        Release-ComObject $existingComponent
-        $existingComponent = $null
-        $importedComponent = $components.Import($mainModulePath)
-        Release-ComObject $importedComponent
-        $importedComponent = $null
+        foreach ($componentName in @($productionComponents.Name)) {
+            try {
+                $existingComponent = $components.Item($componentName)
+                $components.Remove($existingComponent)
+            } catch {
+            } finally {
+                Release-ComObject $existingComponent
+                $existingComponent = $null
+            }
+        }
+        foreach ($productionComponent in $productionComponents) {
+            $importedComponent = $components.Import($productionComponent.Path)
+            Release-ComObject $importedComponent
+            $importedComponent = $null
+        }
     }
 
     $excel.Run("'$tempWorkbookPath'!SetupWorkbook") | Out-Null

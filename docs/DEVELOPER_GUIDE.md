@@ -3,6 +3,9 @@
 ## 構成
 
 - `src/vba/SqlAnalysisFormatter.bas`: 利用者へ配布する VBA 本体
+- `src/vba/SqlAnalysisToastManager.bas`: 2秒表示、連続更新、自動終了を管理するトースト通知本体
+- `src/vba/SqlAnalysisToastEvents.cls`: ブック終了前にトーストの予約を解除するイベント監視
+- `src/vba/SqlAnalysisToast.frm` / `.frx`: 非モーダルのトーストフォームとリソース
 - `src/vba/SqlAnalysisFormatterTests.bas`: 開発者用 VBA テスト
 - `src/vba/SqlAnalysisFormatterGoldenTests.bas`: Excel内で書式を一括比較する回帰テスト補助
 - `docs/USER_GUIDE.md`: ユーザー向けBootstrapで`README.md`として配布する利用ガイド
@@ -34,7 +37,7 @@ powershell -ExecutionPolicy Bypass -File tools/run-vba-tests.ps1 -ParserExePath 
 powershell -ExecutionPolicy Bypass -File tools/run-output-golden-tests.ps1
 ```
 
-配布用マクロブックを更新するときは、最新VBAの同期と初期化を行った後、埋め込みVBAをそのまま使う試験でparserとの整合を確認します。
+配布用マクロブックを更新するときは、最新のプロダクション用VBAコンポーネント一式を同期して初期化した後、埋め込みVBAをそのまま使う試験でparserとの整合を確認します。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/sync-workbook-vba.ps1

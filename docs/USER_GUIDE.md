@@ -17,7 +17,7 @@ parserは.NET 8の実行環境を内包した単一EXEです。通常は.NETを�
 | 配布方法 | 使用するファイル |
 | --- | --- |
 | セットアップ済みブック | `SqlAnalysisFormatter.xlsm`、`SqlAnalysisFormatter.Parser.exe` |
-| 既存ブックへ導入 | `SqlAnalysisFormatter.bas`、`SqlAnalysisFormatter.Parser.exe`、`README.md` |
+| 既存ブックへ導入 | VBAコンポーネント一式、`SqlAnalysisFormatter.Parser.exe`、`README.md` |
 
 ## 最短で使う
 
@@ -42,20 +42,21 @@ SqlAnalysisFormatter/
 
 ## 初回セットアップ
 
-既存のExcelブックへ`.bas`を導入する場合の手順です。
+既存のExcelブックへVBAソースを導入する場合の手順です。
 
 1. 対象ブックのバックアップを作成します。
 2. 対象ブックをExcelで開き、`Excelマクロ有効ブック (*.xlsm)`として保存します。
 3. `Alt + F11`でVBAエディターを開きます。
 4. `ファイル` -> `ファイルのインポート`を選択します。
-5. `SqlAnalysisFormatter.bas`を選択して取り込みます。
-6. VBAエディターを閉じ、Excelで`Alt + F8`を押します。
-7. マクロ一覧から`SetupWorkbook`を選び、`実行`を押します。
-8. `変換定義`、`SQL解析`、`アウトプット①`、`アウトプット②`、`テーブル一覧`の5シートと、`解析`、`クリア`、各アウトプットの`コピー`ボタンが作成されたことを確認します。
-9. ブックを保存します。
-10. 保存したブックと同じフォルダへ`SqlAnalysisFormatter.Parser.exe`を置きます。
+5. `SqlAnalysisToast.frx`を`SqlAnalysisToast.frm`と同じフォルダに置いたままにします。`.frx`は直接インポートしません。
+6. `SqlAnalysisToastEvents.cls`、`SqlAnalysisToastManager.bas`、`SqlAnalysisToast.frm`、`SqlAnalysisFormatter.bas`を順に選択して取り込みます。
+7. VBAエディターを閉じ、Excelで`Alt + F8`を押します。
+8. マクロ一覧から`SetupWorkbook`を選び、`実行`を押します。
+9. `変換定義`、`SQL解析`、`アウトプット①`、`アウトプット②`、`テーブル一覧`の5シートと、`解析`、`クリア`、各アウトプットの`コピー`ボタンが作成されたことを確認します。
+10. ブックを保存します。
+11. 保存したブックと同じフォルダへ`SqlAnalysisFormatter.Parser.exe`を置きます。
 
-利用者がインポートするのは`SqlAnalysisFormatter.bas`だけです。`SqlAnalysisFormatterTests.bas`は開発者用なので取り込みません。
+利用者がインポートするのは本体、トースト管理、終了監視、トーストフォームの4コンポーネントです。`SqlAnalysisFormatterTests.bas`は開発者用なので取り込みません。
 
 ### Bootstrapから展開する場合
 
@@ -65,7 +66,7 @@ SqlAnalysisFormatter/
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\SqlAnalysisFormatter.user.bootstrap.ps1 -TargetDirectory C:\Tools\SqlAnalysisFormatter
 ```
 
-展開先には`SqlAnalysisFormatter.bas`、`SqlAnalysisFormatter.Parser.exe`、`README.md`が作成されます。展開後は上記の「初回セットアップ」に進みます。
+展開先にはVBAコンポーネント一式、`SqlAnalysisFormatter.Parser.exe`、`README.md`が作成されます。展開後は上記の「初回セットアップ」に進みます。
 
 ## 使い方
 
@@ -147,6 +148,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\SqlAnalysisFormatter.u
 - 未対応のSQLは、SQL解析シートのB列と同じ和名変換後SQLをA列へ1行ずつ出力します。
 - フォールバック時は1行空けた末尾へ`フォールバック原因`と、原因クエリがある`アウトプット①`の行範囲を表示します。
 - 解析完了時にも警告ダイアログへフォールバック理由を表示します。parserが原因の論理行を特定できた場合は、その論理行に対応する`SQL解析`シートのA列セルを選択して表示します。1つのセルに複数行のSQLがある場合は、そのSQLを保持するセルを選択します。parser未配置など原因行がない場合はセルを移動しません。
+- フォールバックなしで解析が完了した場合は、Excel画面右下へ完了トーストを2秒間表示します。トーストはセル選択を変更せず、クリックするとすぐ閉じます。フォールバック、重複テーブル、構文エラーなど確認が必要な通知は従来どおりダイアログで表示します。
 - 解析結果へ表示するSQL断片は、タブ、改行、連続空白などの不可視空白を半角スペース1個へ統一します。文字列リテラル、角括弧識別子、二重引用符識別子の内部にある空白は原文どおり保持します。未引用の関数名は大文字へ統一しますが、`dbo.[CURRENT_TIMESTAMP]()`のような引用されたユーザー定義関数名は括弧と文字種を含めて原文どおり表示します。
 - JOINの`＜＞`内には、各ON条件が実際に参照するJOIN対象テーブルを表示します。連鎖JOINで以前に登場したテーブルを参照する場合もそのテーブルを選び、同じ側の複数テーブルを参照する場合は`、`区切りで列挙します。未修飾列などから参照先を特定できない場合は、JOIN構造上で隣接するテーブルを表示します。ON条件はWHERE/HAVINGと同じ配置規則を使い、括弧、`AND`、`OR`、`NOT`を条件の階層に応じて複数行へ展開し、元SQLの評価順序を維持します。
 - SELECTの取得項目にある`tb1.*`は`tb1.全項目`、修飾のない`*`は`全項目`として表示します。SELECT INTOではデータ移送表の対象を`全項目`、移送元を`tb1.全項目`として対応させます。
@@ -209,19 +211,20 @@ SQL内の`AS display_name`自体は変更しません。`＜DB入出力項目定
 
 `テーブル一覧`の登録内容はクリアしません。1行目のヘッダーが変更されていても復元します。変換定義も削除されるため、再利用する定義は事前に別ファイルへ保管してください。
 クリア後も操作中のシートは切り替わりません。5シートすべてで、選択セルとスクロール位置がA1へ戻ります。
+クリア完了後はダイアログを出さず、Excel画面右下へ完了トーストを2秒間表示します。実行前の確認ダイアログは従来どおり表示します。
 
 ## バージョンを更新する
 
 1. 対象ブックのバックアップを作成します。
 2. `Alt + F11`でVBAエディターを開きます。
-3. `標準モジュール`にある既存の`SqlAnalysisFormatter`を右クリックし、`SqlAnalysisFormatterの解放`を選びます。
+3. 既存の`SqlAnalysisFormatter`、`SqlAnalysisToastManager`、`SqlAnalysisToastEvents`、`SqlAnalysisToast`をそれぞれ右クリックし、解放します。
 4. エクスポート確認では、別途バックアップ済みなら`いいえ`を選択します。
-5. 新しい`SqlAnalysisFormatter.bas`をインポートします。
+5. `SqlAnalysisToast.frx`を`SqlAnalysisToast.frm`と同じフォルダに置いたまま、`SqlAnalysisToastEvents.cls`、`SqlAnalysisToastManager.bas`、`SqlAnalysisToast.frm`、`SqlAnalysisFormatter.bas`をインポートします。
 6. `SetupWorkbook`を実行し、ブックを保存します。
 7. `SqlAnalysisFormatter.Parser.exe`も新しいファイルへ置き換えます。
 
 既存の入力データはモジュールの更新だけでは削除されません。
-`.bas`とparser exeは連携形式が対応する同じ配布版へ一緒に更新してください。
+VBAコンポーネント一式とparser exeは、連携形式が対応する同じ配布版へ一緒に更新してください。
 
 ## 困ったとき
 

@@ -16,6 +16,13 @@ if ([string]::IsNullOrWhiteSpace($MainModulePath)) {
 
 $WorkbookPath = (Resolve-Path -LiteralPath $WorkbookPath).Path
 $MainModulePath = (Resolve-Path -LiteralPath $MainModulePath).Path
+$vbaSourceDirectory = Split-Path -Parent $MainModulePath
+$productionComponents = @(
+    @{ Name = 'SqlAnalysisToastEvents'; Path = Join-Path $vbaSourceDirectory 'SqlAnalysisToastEvents.cls' },
+    @{ Name = 'SqlAnalysisToastManager'; Path = Join-Path $vbaSourceDirectory 'SqlAnalysisToastManager.bas' },
+    @{ Name = 'SqlAnalysisToast'; Path = Join-Path $vbaSourceDirectory 'SqlAnalysisToast.frm' },
+    @{ Name = 'SqlAnalysisFormatter'; Path = $MainModulePath }
+)
 $tempWorkbookPath = Join-Path $env:TEMP ('SqlAnalysisFormatter_Sync_' + [guid]::NewGuid().ToString('N') + '.xlsm')
 
 function Release-ComObject {
@@ -50,7 +57,13 @@ try {
         $vbProject = $workbook.VBProject
         $components = $vbProject.VBComponents
 
-        foreach ($moduleName in @('SqlAnalysisFormatter', 'SqlAnalysisFormatterTests', 'SqlAnalysisFormatterGoldenTests')) {
+        foreach ($moduleName in @(
+            'SqlAnalysisFormatter',
+            'SqlAnalysisToastManager',
+            'SqlAnalysisToastEvents',
+            'SqlAnalysisToast',
+            'SqlAnalysisFormatterTests',
+            'SqlAnalysisFormatterGoldenTests')) {
             $existingComponent = $null
             try {
                 $existingComponent = $components.Item($moduleName)
@@ -64,8 +77,11 @@ try {
             }
         }
 
-        $importedComponent = $components.Import($MainModulePath)
-        Release-ComObject $importedComponent
+        foreach ($productionComponent in $productionComponents) {
+            $componentPath = (Resolve-Path -LiteralPath $productionComponent.Path).Path
+            $importedComponent = $components.Import($componentPath)
+            Release-ComObject $importedComponent
+        }
 
         $excel.Run("'$tempWorkbookPath'!SetupWorkbook") | Out-Null
         $excel.Run("'$tempWorkbookPath'!ClearData", $false) | Out-Null

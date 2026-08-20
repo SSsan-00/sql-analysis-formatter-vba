@@ -105,6 +105,10 @@ function Add-TreeArtifacts {
 function Get-UserArtifacts {
     $artifacts = [System.Collections.Generic.List[object]]::new()
     $artifacts.Add((New-Artifact (Join-Path $repoRoot 'src\vba\SqlAnalysisFormatter.bas') 'SqlAnalysisFormatter.bas'))
+    $artifacts.Add((New-Artifact (Join-Path $repoRoot 'src\vba\SqlAnalysisToastManager.bas') 'SqlAnalysisToastManager.bas'))
+    $artifacts.Add((New-Artifact (Join-Path $repoRoot 'src\vba\SqlAnalysisToastEvents.cls') 'SqlAnalysisToastEvents.cls'))
+    $artifacts.Add((New-Artifact (Join-Path $repoRoot 'src\vba\SqlAnalysisToast.frm') 'SqlAnalysisToast.frm'))
+    $artifacts.Add((New-Artifact (Join-Path $repoRoot 'src\vba\SqlAnalysisToast.frx') 'SqlAnalysisToast.frx'))
     $artifacts.Add((New-Artifact $ParserExePath 'SqlAnalysisFormatter.Parser.exe'))
     $artifacts.Add((New-Artifact (Join-Path $repoRoot 'docs\USER_GUIDE.md') 'README.md'))
     $artifacts

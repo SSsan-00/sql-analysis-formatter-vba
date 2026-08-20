@@ -115,28 +115,31 @@ SELECT INTOで`AS display_name`のような式エイリアスを和名表示す�
 6. `SQL解析`シートのA2へ整形済みSQLを貼り付けます。
 7. `解析`ボタンを押してB列とC列以降、`アウトプット①`と`アウトプット②`の出力を確認します。
 
+フォールバックなしの解析完了とクリア完了は、Excel画面右下へ2秒間表示するトーストで通知します。トーストはセル選択を変えず、クリックするとすぐ閉じます。クリア前の確認、フォールバック、重複テーブル、構文エラーなど対応が必要な通知は従来どおりダイアログで表示します。
+
 確定フォーマットの生成には、ScriptDom を内包した `SqlAnalysisFormatter.Parser.exe` を使います。
 exe が存在しない場合や実行に失敗した場合も SQL 解析は継続し、`アウトプット①`には和名変換後クエリをそのまま出力します。`アウトプット②`はタイトルとヘッダーだけを表示します。
 
 ### ローカルBootstrapを使う場合
 
 GitHubへ通信せずに導入するための貼り付け用 bootstrap は、開発者が生成します。
-ユーザー向け bootstrap は、成果物フォルダへ `SqlAnalysisFormatter.bas`、`SqlAnalysisFormatter.Parser.exe`、利用者向け `README.md` だけを展開します。
+ユーザー向け bootstrap は、成果物フォルダへ本体とトースト通知用のVBAコンポーネント、`SqlAnalysisFormatter.Parser.exe`、利用者向け `README.md` を展開します。
 開発者向け bootstrap は、それに加えてプロダクションコード、テストコード、開発者向けドキュメントを展開します。
 展開後の成果物フォルダには bootstrap 自身のソースを含めません。
 
-### `.bas` から導入する場合
+### VBAソースから導入する場合
 
 1. 対象ブックのバックアップを作成し、`.xlsm`形式で保存します。
 2. `Alt + F11`でVBAエディターを開きます。
-3. `ファイル` -> `ファイルのインポート`から`src/vba/SqlAnalysisFormatter.bas`を取り込みます。
-4. Excelへ戻り、`Alt + F8`から`SetupWorkbook`を実行します。
-5. 5シートと、`解析`、`クリア`、各アウトプットの`コピー`ボタンが作成されたことを確認し、ブックを保存します。
-6. ブックと同じフォルダへ`SqlAnalysisFormatter.Parser.exe`を置きます。
+3. `src/vba/SqlAnalysisToast.frx`を`SqlAnalysisToast.frm`と同じフォルダに置いたままにします。`.frx`は直接インポートしません。
+4. `ファイル` -> `ファイルのインポート`から、`SqlAnalysisToastEvents.cls`、`SqlAnalysisToastManager.bas`、`SqlAnalysisToast.frm`、`SqlAnalysisFormatter.bas`を順に取り込みます。
+5. Excelへ戻り、`Alt + F8`から`SetupWorkbook`を実行します。
+6. 5シートと、`解析`、`クリア`、各アウトプットの`コピー`ボタンが作成されたことを確認し、ブックを保存します。
+7. ブックと同じフォルダへ`SqlAnalysisFormatter.Parser.exe`を置きます。
 
-`SqlAnalysisFormatter.bas`と`SqlAnalysisFormatter.Parser.exe`は連携形式が対応する同じ配布版を使用してください。
+VBAコンポーネント一式と`SqlAnalysisFormatter.Parser.exe`は、連携形式が対応する同じ配布版を使用してください。
 
-利用者が取り込む `.bas` は `src/vba/SqlAnalysisFormatter.bas` だけです。
+利用者が取り込むVBAコンポーネントは、本体、トースト管理、終了監視、トーストフォームの4点です。
 `src/vba/SqlAnalysisFormatterTests.bas` は開発者用のテストモジュールなので、通常利用時は取り込みません。
 
 ## 困ったとき
@@ -152,9 +155,9 @@ GitHubへ通信せずに導入するための貼り付け用 bootstrap は、開
 
 ## 開発者向け
 
-VBA ソースは `src/vba/SqlAnalysisFormatter.bas` で管理しています。
-Excel ブックへ反映する場合は、既存の `SqlAnalysisFormatter` モジュールを削除してから再インポートしてください。
-配布用ブックにはテストモジュールを含めず、本体モジュールだけを入れます。
+VBA本体は`src/vba/SqlAnalysisFormatter.bas`、トースト通知は`SqlAnalysisToastManager.bas`、`SqlAnalysisToastEvents.cls`、`SqlAnalysisToast.frm`、`SqlAnalysisToast.frx`で管理しています。
+Excelブックへ反映する場合は、既存の同名コンポーネントを削除してから一式を再インポートしてください。
+配布用ブックにはテストモジュールを含めず、プロダクション用コンポーネントだけを入れます。
 
 ### テスト
 
@@ -185,8 +188,8 @@ powershell -ExecutionPolicy Bypass -File tools/run-vba-tests.ps1 -ParserExePath 
 
 回帰テストの処理時間を計測する場合は、`run-output-golden-tests.ps1`に`-MeasurePerformance`を付けます。
 
-`run-vba-tests.ps1`は一時コピーしたブックに本体モジュールとVBAテストモジュールを取り込み、機能テストを実行します。
-`run-output-golden-tests.ps1`は本体モジュールと書式回帰テスト補助を取り込み、登録済み82ケースを比較します。
+`run-vba-tests.ps1`は一時コピーしたブックにプロダクション用VBA一式とVBAテストモジュールを取り込み、機能テストを実行します。
+`run-output-golden-tests.ps1`はプロダクション用VBA一式と書式回帰テスト補助を取り込み、登録済み82ケースを比較します。
 保存済みの `SqlAnalysisFormatter.xlsm` にはテストモジュールを残しません。
 
 CRUDテストケースの内容は`tests/CRUD_TEST_CASES.md`、登録済み82出力ケースは`tests/OutputReportCases.json`と`tests/SqlAnalysisFormatter.OutputExpectations.xlsx`にまとめています。登録済み82ケースはすべてユーザーレビュー済みです。

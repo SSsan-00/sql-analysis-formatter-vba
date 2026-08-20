@@ -6,6 +6,7 @@ Option Explicit
 
 Private Const NO_BORDER As Long = -4142
 Private Const VALUE_TOLERANCE As Double = 0.01
+Private Const FORMAT_MATCHED As String = "__SAF_FORMAT_MATCHED__"
 
 ' 期待値ブックと実出力の書式をExcel内部で一括比較
 Public Function CompareOutputGoldenFormat( _
@@ -24,6 +25,7 @@ Public Function CompareOutputGoldenFormat( _
     Dim mismatch As String
 
     On Error GoTo CompareError
+    CompareOutputGoldenFormat = FORMAT_MATCHED
 
     Set expectedSheet = Application.Workbooks(expectationWorkbookName).Worksheets(expectationSheetName)
     Set actualSheet = ThisWorkbook.Worksheets(actualSheetName)

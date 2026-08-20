@@ -87,6 +87,10 @@ try {
 
     Invoke-Bootstrap $UserBootstrapPath $userTarget
     Assert-PathExists (Join-Path $userTarget 'SqlAnalysisFormatter.bas')
+    Assert-PathExists (Join-Path $userTarget 'SqlAnalysisToastManager.bas')
+    Assert-PathExists (Join-Path $userTarget 'SqlAnalysisToastEvents.cls')
+    Assert-PathExists (Join-Path $userTarget 'SqlAnalysisToast.frm')
+    Assert-PathExists (Join-Path $userTarget 'SqlAnalysisToast.frx')
     Assert-PathExists (Join-Path $userTarget 'SqlAnalysisFormatter.Parser.exe')
     Assert-PathExists (Join-Path $userTarget 'README.md')
     Assert-FileContains (Join-Path $userTarget 'README.md') '## 最短で使う'
@@ -103,6 +107,10 @@ try {
 
     Invoke-Bootstrap $DeveloperBootstrapPath $developerTarget
     Assert-PathExists (Join-Path $developerTarget 'SqlAnalysisFormatter.bas')
+    Assert-PathExists (Join-Path $developerTarget 'SqlAnalysisToastManager.bas')
+    Assert-PathExists (Join-Path $developerTarget 'SqlAnalysisToastEvents.cls')
+    Assert-PathExists (Join-Path $developerTarget 'SqlAnalysisToast.frm')
+    Assert-PathExists (Join-Path $developerTarget 'SqlAnalysisToast.frx')
     Assert-PathExists (Join-Path $developerTarget 'SqlAnalysisFormatter.Parser.exe')
     Assert-PathExists (Join-Path $developerTarget 'README.md')
     Assert-PathExists (Join-Path $developerTarget 'docs\DEVELOPER_GUIDE.md')

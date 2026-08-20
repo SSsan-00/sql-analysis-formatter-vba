@@ -12,6 +12,12 @@ $workbookPath = Join-Path $repoRoot 'SqlAnalysisFormatter.xlsm'
 $expectationPath = Join-Path $repoRoot 'tests\SqlAnalysisFormatter.OutputExpectations.xlsx'
 $fixturePath = Join-Path $repoRoot 'tests\OutputReportCases.json'
 $mainModulePath = Join-Path $repoRoot 'src\vba\SqlAnalysisFormatter.bas'
+$productionComponents = @(
+    @{ Name = 'SqlAnalysisToastEvents'; Path = Join-Path $repoRoot 'src\vba\SqlAnalysisToastEvents.cls' },
+    @{ Name = 'SqlAnalysisToastManager'; Path = Join-Path $repoRoot 'src\vba\SqlAnalysisToastManager.bas' },
+    @{ Name = 'SqlAnalysisToast'; Path = Join-Path $repoRoot 'src\vba\SqlAnalysisToast.frm' },
+    @{ Name = 'SqlAnalysisFormatter'; Path = $mainModulePath }
+)
 $goldenTestModulePath = Join-Path $repoRoot 'src\vba\SqlAnalysisFormatterGoldenTests.bas'
 $tempWorkbookPath = Join-Path $env:TEMP ('SqlAnalysisFormatter_Golden_' + [guid]::NewGuid().ToString('N') + '.xlsm')
 $previousParserExePath = $env:SQL_ANALYSIS_FORMATTER_PARSER_EXE
@@ -89,13 +95,15 @@ try {
     $excel.EnableEvents = $false
     $excel.Calculation = -4135
     $components = $workbook.VBProject.VBComponents
-    foreach ($moduleName in @('SqlAnalysisFormatter', 'SqlAnalysisFormatterGoldenTests')) {
+    foreach ($moduleName in @($productionComponents.Name) + @('SqlAnalysisFormatterGoldenTests')) {
         try {
             $components.Remove($components.Item($moduleName))
         } catch {
         }
     }
-    $components.Import($mainModulePath) | Out-Null
+    foreach ($productionComponent in $productionComponents) {
+        $components.Import($productionComponent.Path) | Out-Null
+    }
     $components.Import($goldenTestModulePath) | Out-Null
     $excel.Run("'$tempWorkbookPath'!SetupWorkbook") | Out-Null
 
@@ -175,7 +183,7 @@ try {
                 $expectedSheet.Columns.Item($column).ColumnWidth = $outputSheet.Columns.Item($column).ColumnWidth
             }
         } else {
-            $formatFailure = [string]$excel.Run(
+            $formatResult = $excel.Run(
                 "'$tempWorkbookPath'!CompareOutputGoldenFormat",
                 [string]$testCase.id,
                 $expectationBookName,
@@ -183,6 +191,14 @@ try {
                 $outputSheetName,
                 [int]$expectedRowCount,
                 [bool]($caseIndex -eq 1))
+            $formatFailure = if ($null -eq $formatResult) {
+                [string]::Empty
+            } else {
+                [string]$formatResult
+            }
+            if ($formatFailure -eq '__SAF_FORMAT_MATCHED__') {
+                $formatFailure = [string]::Empty
+            }
             if (-not [string]::IsNullOrEmpty($formatFailure)) {
                 throw $formatFailure
             }
