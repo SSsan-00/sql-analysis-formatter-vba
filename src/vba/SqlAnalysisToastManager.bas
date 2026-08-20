@@ -6,8 +6,16 @@ Private Const TOAST_LABEL_NAME As String = "MessageLabel"
 Private Const TOAST_DURATION_SECONDS_VALUE As Long = 2
 Private Const TOAST_WIDTH As Double = 264#
 Private Const TOAST_HEIGHT As Double = 54#
+Private Const TOAST_LABEL_HEIGHT As Double = 24#
 Private Const TOAST_RIGHT_MARGIN As Double = 20#
 Private Const TOAST_BOTTOM_MARGIN As Double = 70#
+Private Const TOAST_BACKGROUND_RED As Long = 221
+Private Const TOAST_BACKGROUND_GREEN As Long = 235
+Private Const TOAST_BACKGROUND_BLUE As Long = 247
+Private Const TOAST_TEXT_RED As Long = 31
+Private Const TOAST_TEXT_GREEN As Long = 78
+Private Const TOAST_TEXT_BLUE As Long = 120
+Private Const TOAST_FONT_SIZE As Double = 12#
 Private Const GWL_STYLE As Long = -16
 Private Const GWL_EXSTYLE As Long = -20
 Private Const WS_CAPTION As Long = &HC00000
@@ -120,6 +128,7 @@ Public Sub ShowToast(ByVal message As String)
     ConfigureToastForm mToastForm, message
     toastWindow = ConfigureNoActivateWindow(CStr(mToastForm.Caption))
     If toastWindow = 0 Then GoTo ToastFailed
+    CenterToastMessageLabel mToastForm
     mToastForm.Show vbModeless
     PositionToastWindow toastWindow
     ShowWindow toastWindow, SW_SHOWNOACTIVATE
@@ -225,22 +234,32 @@ Private Sub ConfigureToastForm(ByVal toastForm As Object, ByVal message As Strin
 
     toastForm.Width = TOAST_WIDTH
     toastForm.Height = TOAST_HEIGHT
-    toastForm.BackColor = RGB(33, 115, 70)
+    toastForm.BackColor = RGB( _
+        TOAST_BACKGROUND_RED, TOAST_BACKGROUND_GREEN, TOAST_BACKGROUND_BLUE)
     Set messageLabel = toastForm.Controls(TOAST_LABEL_NAME)
     messageLabel.Caption = message
     messageLabel.Left = 14
-    messageLabel.Top = 8
     messageLabel.Width = toastForm.InsideWidth - 28
-    messageLabel.Height = toastForm.InsideHeight - 16
+    messageLabel.Height = TOAST_LABEL_HEIGHT
     messageLabel.BackStyle = 0
-    messageLabel.ForeColor = RGB(255, 255, 255)
+    messageLabel.ForeColor = RGB(TOAST_TEXT_RED, TOAST_TEXT_GREEN, TOAST_TEXT_BLUE)
     messageLabel.TextAlign = 2
     messageLabel.WordWrap = False
 
     On Error Resume Next
     messageLabel.Font.Name = "Yu Gothic UI"
-    messageLabel.Font.Size = 10
+    messageLabel.Font.Size = TOAST_FONT_SIZE
+    messageLabel.Font.Bold = True
     On Error GoTo 0
+    CenterToastMessageLabel toastForm
+End Sub
+
+Private Sub CenterToastMessageLabel(ByVal toastForm As Object)
+    Dim messageLabel As Object
+
+    Set messageLabel = toastForm.Controls(TOAST_LABEL_NAME)
+    messageLabel.Top = (toastForm.InsideHeight - messageLabel.Height) / 2
+    If messageLabel.Top < 0 Then messageLabel.Top = 0
 End Sub
 
 #If VBA7 Then

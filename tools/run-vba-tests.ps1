@@ -113,6 +113,7 @@ try {
         'SetupWorkbook_ProvidesToastForm',
         'SetupWorkbook_TracksMissingNameFillColor',
         'CompletionToast_UsesTwoSecondDuration',
+        'CompletionToast_UsesReadableBlueStyle',
         'CompletionToast_ShowsWithoutChangingSelection',
         'CompletionToast_ReplacesExistingNotification',
         'CompletionToast_DismissesImmediately',

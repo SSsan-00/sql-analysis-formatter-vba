@@ -19,6 +19,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     SetupWorkbook_ProvidesToastForm
     SetupWorkbook_TracksMissingNameFillColor
     CompletionToast_UsesTwoSecondDuration
+    CompletionToast_UsesReadableBlueStyle
     CompletionToast_ShowsWithoutChangingSelection
     CompletionToast_ReplacesExistingNotification
     CompletionToast_DismissesImmediately
@@ -99,6 +100,60 @@ Public Sub CompletionToast_UsesTwoSecondDuration()
     If SqlAnalysisToastManager.ToastDurationSeconds() <> 2 Then
         Fail "Completion toast duration should be two seconds."
     End If
+End Sub
+
+'@TestMethod("CompletionToast")
+Public Sub CompletionToast_UsesReadableBlueStyle()
+    Dim toastForm As Object
+    Dim loadedForm As Object
+    Dim messageLabel As Object
+    Dim verticalOffset As Double
+
+    On Error GoTo TestFail
+    SqlAnalysisToastManager.ShowToast "Toast style test"
+    For Each loadedForm In VBA.UserForms
+        If TypeName(loadedForm) = "SqlAnalysisToast" Then
+            Set toastForm = loadedForm
+            Exit For
+        End If
+    Next loadedForm
+    If toastForm Is Nothing Then
+        Fail "SqlAnalysisToast should be loaded after ShowToast."
+    End If
+    Set messageLabel = toastForm.Controls("MessageLabel")
+
+    If CLng(toastForm.BackColor) <> RGB(221, 235, 247) Then
+        Fail "Completion toast background should use #DDEBF7."
+    End If
+    If CLng(messageLabel.ForeColor) <> RGB(31, 78, 120) Then
+        Fail "Completion toast text should use #1F4E78."
+    End If
+    If CStr(messageLabel.Font.Name) <> "Yu Gothic UI" Then
+        Fail "Completion toast should use Yu Gothic UI."
+    End If
+    If CDbl(messageLabel.Font.Size) <> 12# Then
+        Fail "Completion toast font size should be 12 points."
+    End If
+    If CDbl(messageLabel.Height) < 24# Then
+        Fail "Completion toast label should be tall enough for 12-point text."
+    End If
+    If Not CBool(messageLabel.Font.Bold) Then
+        Fail "Completion toast text should be bold."
+    End If
+    verticalOffset = Abs( _
+        (CDbl(messageLabel.Top) + CDbl(messageLabel.Height) / 2#) - _
+        CDbl(toastForm.InsideHeight) / 2#)
+    If verticalOffset > 1# Then
+        Fail "Completion toast text should be vertically centered."
+    End If
+
+TestCleanUp:
+    SqlAnalysisToastManager.DismissToast
+    Exit Sub
+
+TestFail:
+    SqlAnalysisToastManager.DismissToast
+    Err.Raise Err.Number, Err.Source, Err.Description
 End Sub
 
 '@TestMethod("CompletionToast")
