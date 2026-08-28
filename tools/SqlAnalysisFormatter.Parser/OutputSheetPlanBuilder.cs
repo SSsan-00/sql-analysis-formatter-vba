@@ -1,6 +1,7 @@
 using Microsoft.SqlServer.TransactSql.ScriptDom;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace SqlAnalysisFormatter.Parser;
 
@@ -15,6 +16,7 @@ public static class OutputSheetPlanBuilder
     private const int MultipleCaseBranchIndentColumns = 6;
     private const int OffsetCaseMarkerColumn = 27;
     private const int OffsetCaseDetailColumn = 28;
+    private static readonly AsyncLocal<DisplayAliasContext?> CurrentDisplayAliases = new();
 
     /// <summary>
     /// 和名変換済みSQLから描画計画を作成
@@ -239,7 +241,12 @@ public static class OutputSheetPlanBuilder
             return BuildSelectIntoStatement(sql, selectStatement, intoQuery, mappings);
         }
 
-        var (subqueries, plans) = BuildLeadingSubqueryPlans(sql, selectStatement, mappings);
+        var binaryAliases = CreateBinaryDisplayAliasPlan(selectStatement.QueryExpression);
+        var (subqueries, plans) = BuildLeadingSubqueryPlans(
+            sql,
+            selectStatement,
+            mappings,
+            binaryAliases);
 
         var wholeChildren = DirectChildSubqueries(selectStatement.QueryExpression, subqueries);
         var wholePlan = BuildQueryExpression(
@@ -247,8 +254,9 @@ public static class OutputSheetPlanBuilder
             selectStatement.QueryExpression,
             mappings,
             "＜DB入出力項目定義＞",
-            wholeChildren.Where(child => !child.IsNamed).Select(child => child.Name));
-        plans.Add(ReplaceSubqueries(wholePlan, sql, wholeChildren));
+            wholeChildren.Where(child => !child.IsNamed).Select(child => child.Name),
+            binaryAliases);
+        plans.Add(ReplaceSubqueries(wholePlan, sql, wholeChildren, binaryAliases));
 
         return CombinePlans(plans);
     }
@@ -306,20 +314,33 @@ public static class OutputSheetPlanBuilder
         BuildLeadingSubqueryPlans(
             string sql,
             TSqlFragment fragment,
-            IReadOnlyList<MappingDefinition> mappings)
+            IReadOnlyList<MappingDefinition> mappings,
+            BinaryDisplayAliasPlan? outerBinaryAliases = null)
     {
         var subqueries = SubqueryCollector.Collect(fragment);
         var plans = new List<OutputSheetPlan>(subqueries.Count + 1);
         foreach (var subquery in subqueries)
         {
             var children = DirectChildSubqueries(subquery.QueryExpression, subqueries);
-            var plan = BuildQueryExpression(
-                sql,
-                subquery.QueryExpression,
-                mappings,
-                $"サブクエリ[{subquery.Name}]",
-                children.Where(child => !child.IsNamed).Select(child => child.Name));
-            plans.Add(ReplaceSubqueries(plan, sql, children));
+            var innerBinaryAliases = CreateBinaryDisplayAliasPlan(subquery.QueryExpression);
+            OutputSheetPlan plan;
+            using (PushDisplayAliases(
+                outerBinaryAliases?.ContextContaining(subquery.QueryExpression)))
+            {
+                plan = BuildQueryExpression(
+                    sql,
+                    subquery.QueryExpression,
+                    mappings,
+                    $"サブクエリ[{subquery.Name}]",
+                    children.Where(child => !child.IsNamed).Select(child => child.Name),
+                    innerBinaryAliases);
+                plan = ReplaceSubqueries(
+                    plan,
+                    sql,
+                    children,
+                    innerBinaryAliases);
+            }
+            plans.Add(plan);
         }
 
         return (subqueries, plans);
@@ -472,7 +493,8 @@ public static class OutputSheetPlanBuilder
                 transfers.Add(new TransferItem(
                     targets[index],
                     RenderSelectStar(DisplayText(sql, star)),
-                    string.Empty));
+                    string.Empty,
+                    DisplayAliases: CurrentDisplayAliases.Value));
                 continue;
             }
 
@@ -620,6 +642,8 @@ public static class OutputSheetPlanBuilder
                 sourceExpression);
         }
 
+        var binaryAliases = BinaryDisplayAliasPlan.Create(branches);
+
         var targets = BuildInsertSelectTargets(sql, specification, branches[0], mappings);
         for (var index = 0; index < branches.Count; index++)
         {
@@ -632,19 +656,33 @@ public static class OutputSheetPlanBuilder
             }
         }
 
-        var (subqueries, plans) = BuildLeadingSubqueryPlans(sql, statement, mappings);
+        var (subqueries, plans) = BuildLeadingSubqueryPlans(
+            sql,
+            statement,
+            mappings,
+            binaryAliases);
         var sourceChildren = DirectChildSubqueries(sourceExpression, subqueries);
         var sourcePlan = BuildQueryExpression(
             sql,
             sourceExpression,
             mappings,
             "＜DB入出力項目定義＞",
-            sourceChildren.Where(child => !child.IsNamed).Select(child => child.Name));
-        plans.Add(ReplaceSubqueries(sourcePlan, sql, sourceChildren));
+            sourceChildren.Where(child => !child.IsNamed).Select(child => child.Name),
+            binaryAliases);
+        plans.Add(ReplaceSubqueries(
+            sourcePlan,
+            sql,
+            sourceChildren,
+            binaryAliases));
 
-        var transferPatterns = branches
-            .Select(branch => BuildSelectTransfers(sql, targets, branch.SelectElements))
-            .ToArray();
+        var transferPatterns = new List<IReadOnlyList<TransferItem>>(branches.Count);
+        foreach (var branch in branches)
+        {
+            using (PushDisplayAliases(binaryAliases.ContextFor(branch)))
+            {
+                transferPatterns.Add(BuildSelectTransfers(sql, targets, branch.SelectElements));
+            }
+        }
         var targetDisplay = BuildTargetTableDisplay(
             specification.Target,
             mappings,
@@ -654,7 +692,8 @@ public static class OutputSheetPlanBuilder
             BuildBinaryTableDisplays(
                 branches,
                 mappings,
-                sourceChildren.Where(child => !child.IsNamed).Select(child => child.Name)));
+                sourceChildren.Where(child => !child.IsNamed).Select(child => child.Name),
+                binaryAliases));
         var transferPlan = BuildLabeledDataTransferPlan(
             sql,
             references,
@@ -919,6 +958,7 @@ public static class OutputSheetPlanBuilder
         row++;
         foreach (var transfer in transfers)
         {
+            using var displayAliasScope = PushDisplayAliases(transfer.DisplayAliases);
             var itemStartRow = row;
             cells.Add(new OutputCell(row, 1, transfer.Target));
             if (transfer.Expression is not null &&
@@ -1040,13 +1080,20 @@ public static class OutputSheetPlanBuilder
         QueryExpression expression,
         IReadOnlyList<MappingDefinition> mappings,
         string title,
-        IEnumerable<string> additionalTables)
+        IEnumerable<string> additionalTables,
+        BinaryDisplayAliasPlan? binaryAliases = null)
     {
         expression = UnwrapQueryExpression(expression);
         return expression switch
         {
             QuerySpecification query => BuildSelect(sql, query, mappings, title, additionalTables),
-            BinaryQueryExpression binary => BuildBinaryQuery(sql, binary, mappings, title, additionalTables),
+            BinaryQueryExpression binary => BuildBinaryQuery(
+                sql,
+                binary,
+                mappings,
+                title,
+                additionalTables,
+                binaryAliases),
             _ => CreateFallback(
                 RawFragmentText(sql, expression),
                 "未対応のクエリ式: " + expression.GetType().Name)
@@ -1061,7 +1108,8 @@ public static class OutputSheetPlanBuilder
         BinaryQueryExpression binary,
         IReadOnlyList<MappingDefinition> mappings,
         string title,
-        IEnumerable<string> additionalTables)
+        IEnumerable<string> additionalTables,
+        BinaryDisplayAliasPlan? binaryAliases = null)
     {
         var branches = new List<QuerySpecification>();
         var separators = new List<string>();
@@ -1071,10 +1119,13 @@ public static class OutputSheetPlanBuilder
             return CreateFallback(RawFragmentText(sql, binary), "複合クエリの分岐を取得できませんでした");
         }
 
+        binaryAliases ??= BinaryDisplayAliasPlan.Create(branches);
+
         var tableDisplays = BuildBinaryTableDisplays(
             branches,
             mappings,
-            additionalTables);
+            additionalTables,
+            binaryAliases);
         var cells = new List<OutputCell>
         {
             new(1, 1, title),
@@ -1088,7 +1139,11 @@ public static class OutputSheetPlanBuilder
 
         for (var index = 0; index < branches.Count; index++)
         {
-            var branchPlan = BuildSelect(sql, branches[index], mappings, title, []);
+            OutputSheetPlan branchPlan;
+            using (PushDisplayAliases(binaryAliases.ContextFor(branches[index])))
+            {
+                branchPlan = BuildSelect(sql, branches[index], mappings, title, []);
+            }
             var bodyOffset = row - 3;
             cells.AddRange(branchPlan.Cells
                 .Where(cell => cell.Row >= 3)
@@ -1134,6 +1189,25 @@ public static class OutputSheetPlanBuilder
         {
             branches.Add(query);
         }
+    }
+
+    /// <summary>
+    /// 複合クエリなら全分岐で共有する表示用別名計画を作成
+    /// </summary>
+    private static BinaryDisplayAliasPlan? CreateBinaryDisplayAliasPlan(
+        QueryExpression expression)
+    {
+        if (UnwrapQueryExpression(expression) is not BinaryQueryExpression binary)
+        {
+            return null;
+        }
+
+        var branches = new List<QuerySpecification>();
+        var separators = new List<string>();
+        AddBinaryBranches(binary, branches, separators);
+        return branches.Count > 0
+            ? BinaryDisplayAliasPlan.Create(branches)
+            : null;
     }
 
     /// <summary>
@@ -1186,16 +1260,23 @@ public static class OutputSheetPlanBuilder
     private static OutputSheetPlan ReplaceSubqueries(
         OutputSheetPlan plan,
         string sql,
-        IReadOnlyList<SubqueryInfo> subqueries)
+        IReadOnlyList<SubqueryInfo> subqueries,
+        BinaryDisplayAliasPlan? binaryAliases = null)
     {
         if (subqueries.Count == 0)
         {
             return plan;
         }
 
-        var replacements = subqueries
-            .Select(subquery => CreateSubqueryReplacement(sql, subquery))
-            .ToArray();
+        var replacements = new List<SubqueryReplacement>(subqueries.Count);
+        foreach (var subquery in subqueries)
+        {
+            using (PushDisplayAliases(
+                binaryAliases?.ContextContaining(subquery.QueryExpression)))
+            {
+                replacements.Add(CreateSubqueryReplacement(sql, subquery));
+            }
+        }
         var cells = plan.Cells.Select(cell =>
         {
             var value = cell.Value;
@@ -3257,10 +3338,21 @@ public static class OutputSheetPlanBuilder
     private static IReadOnlyList<string> BuildBinaryTableDisplays(
         IEnumerable<QuerySpecification> branches,
         IReadOnlyList<MappingDefinition> mappings,
-        IEnumerable<string> additionalTables)
+        IEnumerable<string> additionalTables,
+        BinaryDisplayAliasPlan? binaryAliases = null)
     {
-        return branches
-            .SelectMany(branch => BuildTableDisplays(branch.FromClause, mappings, []))
+        var branchArray = branches.ToArray();
+        binaryAliases ??= BinaryDisplayAliasPlan.Create(branchArray);
+        var displays = new List<string>();
+        foreach (var branch in branchArray)
+        {
+            using (PushDisplayAliases(binaryAliases.ContextFor(branch)))
+            {
+                displays.AddRange(BuildTableDisplays(branch.FromClause, mappings, []));
+            }
+        }
+
+        return displays
             .Concat(additionalTables)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -3350,8 +3442,10 @@ public static class OutputSheetPlanBuilder
         IReadOnlyList<MappingDefinition> mappings,
         bool allowStandaloneTableName = false)
     {
-        var tableId = table.Alias?.Value ?? table.SchemaObject.BaseIdentifier.Value;
-        var tableName = ResolveTableName(table, mappings);
+        var physicalTableId = table.SchemaObject.BaseIdentifier.Value;
+        var sourceTableId = table.Alias?.Value ?? physicalTableId;
+        var tableId = CurrentDisplayAliases.Value?.DisplayAliasFor(table) ?? sourceTableId;
+        var tableName = ResolveDisplayTableName(table, sourceTableId, tableId, mappings);
         if (tableName == MissingName && allowStandaloneTableName)
         {
             var standaloneTableName = ResolveStandaloneTableName(mappings);
@@ -3363,7 +3457,40 @@ public static class OutputSheetPlanBuilder
             }
         }
 
+        if (tableName == MissingName &&
+            table.Alias is not null &&
+            CurrentDisplayAliases.Value?.ShouldPreservePhysicalTableId(table) == true)
+        {
+            return $"{MissingName}[{physicalTableId}][{tableId}]";
+        }
+
         return $"{tableName}[{tableId}]";
+    }
+
+    /// <summary>
+    /// 元のSQL別名または物理名からテーブル和名を解決
+    /// </summary>
+    private static string ResolveDisplayTableName(
+        NamedTableReference table,
+        string sourceTableId,
+        string displayTableId,
+        IReadOnlyList<MappingDefinition> mappings)
+    {
+        if (!string.Equals(sourceTableId, displayTableId, StringComparison.OrdinalIgnoreCase))
+        {
+            return ResolveTableName(
+                table.SchemaObject.BaseIdentifier.Value,
+                mappings);
+        }
+
+        var sourceName = ResolveTableName(table, mappings);
+        if (sourceName != MissingName ||
+            CurrentDisplayAliases.Value?.ShouldPreservePhysicalTableId(table) != true)
+        {
+            return sourceName;
+        }
+
+        return ResolveTableName(table.SchemaObject.BaseIdentifier.Value, mappings);
     }
 
     /// <summary>
@@ -3373,7 +3500,29 @@ public static class OutputSheetPlanBuilder
         string tableId,
         IReadOnlyList<MappingDefinition> mappings)
     {
-        return $"{ResolveTableName(tableId, mappings)}[{tableId}]";
+        var aliases = CurrentDisplayAliases.Value;
+        var displayTableId = aliases?.DisplayAliasFor(tableId) ?? tableId;
+        var physicalTableId = aliases?.PhysicalTableIdFor(tableId);
+        var usesSyntheticAlias = !string.Equals(
+            tableId,
+            displayTableId,
+            StringComparison.OrdinalIgnoreCase);
+        var tableName = usesSyntheticAlias && physicalTableId is not null
+            ? ResolveTableName(physicalTableId, mappings)
+            : ResolveTableName(tableId, mappings);
+        if (tableName == MissingName &&
+            physicalTableId is not null &&
+            aliases?.ShouldPreservePhysicalTableId(tableId) == true)
+        {
+            tableName = ResolveTableName(physicalTableId, mappings);
+        }
+        if (tableName == MissingName &&
+            physicalTableId is not null &&
+            aliases?.ShouldPreservePhysicalTableId(tableId) == true)
+        {
+            return $"{MissingName}[{physicalTableId}][{displayTableId}]";
+        }
+        return $"{tableName}[{displayTableId}]";
     }
 
     /// <summary>
@@ -3516,6 +3665,16 @@ public static class OutputSheetPlanBuilder
     }
 
     /// <summary>
+    /// 現在の描画スコープへ表示用別名を追加し、破棄時に元へ戻す
+    /// </summary>
+    private static IDisposable PushDisplayAliases(DisplayAliasContext? aliases)
+    {
+        var previous = CurrentDisplayAliases.Value;
+        CurrentDisplayAliases.Value = DisplayAliasContext.Combine(previous, aliases);
+        return new DisplayAliasScope(previous);
+    }
+
+    /// <summary>
     /// クエリ式を囲む括弧ノードを除去
     /// </summary>
     private static QueryExpression UnwrapQueryExpression(QueryExpression expression)
@@ -3534,7 +3693,11 @@ public static class OutputSheetPlanBuilder
     private static string FragmentText(string sql, TSqlFragment fragment)
     {
         return CompactSqlWhitespace(
-            ExtractFragmentText(sql, fragment, normalizeCoalesce: true));
+            ExtractFragmentText(
+                sql,
+                fragment,
+                normalizeCoalesce: true,
+                applyDisplayAliases: true));
     }
 
     /// <summary>
@@ -3553,7 +3716,8 @@ public static class OutputSheetPlanBuilder
                 fragment,
                 uppercaseDateParts,
                 compactUnarySigns,
-                uppercaseOffsetKeywords));
+                uppercaseOffsetKeywords,
+                CurrentDisplayAliases.Value?.Replacements));
     }
 
     /// <summary>
@@ -3561,7 +3725,11 @@ public static class OutputSheetPlanBuilder
     /// </summary>
     private static string RawFragmentText(string sql, TSqlFragment fragment)
     {
-        return ExtractFragmentText(sql, fragment, normalizeCoalesce: false);
+        return ExtractFragmentText(
+            sql,
+            fragment,
+            normalizeCoalesce: false,
+            applyDisplayAliases: false);
     }
 
     /// <summary>
@@ -3570,7 +3738,8 @@ public static class OutputSheetPlanBuilder
     private static string ExtractFragmentText(
         string sql,
         TSqlFragment fragment,
-        bool normalizeCoalesce)
+        bool normalizeCoalesce,
+        bool applyDisplayAliases)
     {
         if (fragment.StartOffset < 0 || fragment.FragmentLength <= 0 ||
             fragment.StartOffset + fragment.FragmentLength > sql.Length)
@@ -3583,8 +3752,45 @@ public static class OutputSheetPlanBuilder
         {
             text = NormalizeCoalesceKeywords(text, fragment.StartOffset, fragment);
         }
+        if (applyDisplayAliases && CurrentDisplayAliases.Value is not null)
+        {
+            text = ApplyTextReplacements(
+                text,
+                fragment.StartOffset,
+                CurrentDisplayAliases.Value.Replacements);
+        }
 
         return text.Trim();
+    }
+
+    /// <summary>
+    /// 元SQL上の絶対位置を使い、表示用置換を断片の後方から適用
+    /// </summary>
+    private static string ApplyTextReplacements(
+        string text,
+        int fragmentStartOffset,
+        IReadOnlyList<SqlTextReplacement> replacements)
+    {
+        var fragmentEndOffset = fragmentStartOffset + text.Length;
+        foreach (var replacement in replacements
+            .Where(item =>
+                item.Offset >= fragmentStartOffset &&
+                item.Offset + item.Length <= fragmentEndOffset)
+            .OrderByDescending(item => item.Offset))
+        {
+            var relativeOffset = replacement.Offset - fragmentStartOffset;
+            if (relativeOffset < 0 ||
+                replacement.Length <= 0 ||
+                relativeOffset + replacement.Length > text.Length)
+            {
+                continue;
+            }
+
+            text = text.Remove(relativeOffset, replacement.Length)
+                .Insert(relativeOffset, replacement.Value);
+        }
+
+        return text;
     }
 
     /// <summary>
@@ -3841,12 +4047,18 @@ public static class OutputSheetPlanBuilder
                 target,
                 FragmentText(sql, directColumn),
                 string.Empty,
-                expression);
+                expression,
+                DisplayAliases: CurrentDisplayAliases.Value);
         }
 
         if (unwrapped is ScalarSubquery)
         {
-            return new TransferItem(target, expressionText, string.Empty, expression);
+            return new TransferItem(
+                target,
+                expressionText,
+                string.Empty,
+                expression,
+                DisplayAliases: CurrentDisplayAliases.Value);
         }
 
         var sources = CollectTransferSources(
@@ -3856,7 +4068,8 @@ public static class OutputSheetPlanBuilder
             target,
             string.Join("、", sources),
             expressionText,
-            expression);
+            expression,
+            DisplayAliases: CurrentDisplayAliases.Value);
     }
 
     /// <summary>
@@ -3891,7 +4104,8 @@ public static class OutputSheetPlanBuilder
                 expressionText,
                 expression,
                 RenderCaseInMethod: true,
-                DirectCases: directCases);
+                DirectCases: directCases,
+                DisplayAliases: CurrentDisplayAliases.Value);
         }
 
         return CreateTransferItem(sql, target, expressionText, expression);
@@ -4442,6 +4656,425 @@ public static class OutputSheetPlanBuilder
         }
     }
 
+    /// <summary>
+    /// 複合クエリの各分岐へ、フレーム内で一意な表示用テーブル別名を割り当て
+    /// </summary>
+    private sealed class BinaryDisplayAliasPlan
+    {
+        private readonly IReadOnlyList<BranchDisplayAliases> branches;
+
+        private BinaryDisplayAliasPlan(IReadOnlyList<BranchDisplayAliases> branches)
+        {
+            this.branches = branches;
+        }
+
+        public static BinaryDisplayAliasPlan Create(
+            IReadOnlyList<QuerySpecification> queryBranches)
+        {
+            var reservedAliases = UsedTableIdentifierCollector.Collect(queryBranches);
+            var firstPhysicalByAlias = new Dictionary<string, string>(
+                StringComparer.OrdinalIgnoreCase);
+            var displayByBinding = new Dictionary<string, string>(
+                StringComparer.OrdinalIgnoreCase);
+            var assignments = new List<BranchAliasAssignment>(queryBranches.Count);
+            var collidingAliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var branch in queryBranches)
+            {
+                var tableBindings = new Dictionary<int, DisplayAliasBinding>();
+                var renamedAliases = new Dictionary<string, string>(
+                    StringComparer.OrdinalIgnoreCase);
+                var namedTables = branch.FromClause?.TableReferences
+                    .SelectMany(EnumerateNamedTables)
+                    .ToArray() ?? [];
+                foreach (var table in namedTables)
+                {
+                    if (table.Alias is null)
+                    {
+                        continue;
+                    }
+
+                    var sourceAlias = table.Alias.Value;
+                    var physicalId = PhysicalTableIdentity(table);
+                    var bindingKey = sourceAlias + "\u001f" + physicalId;
+                    if (!displayByBinding.TryGetValue(bindingKey, out var displayAlias))
+                    {
+                        if (!firstPhysicalByAlias.TryGetValue(sourceAlias, out var firstPhysicalId))
+                        {
+                            firstPhysicalByAlias.Add(sourceAlias, physicalId);
+                            displayAlias = sourceAlias;
+                        }
+                        else if (string.Equals(
+                            firstPhysicalId,
+                            physicalId,
+                            StringComparison.OrdinalIgnoreCase))
+                        {
+                            displayAlias = sourceAlias;
+                        }
+                        else
+                        {
+                            displayAlias = AllocateDisplayAlias(reservedAliases);
+                        }
+
+                        displayByBinding.Add(bindingKey, displayAlias);
+                    }
+
+                    tableBindings[table.StartOffset] = new DisplayAliasBinding(
+                        sourceAlias,
+                        displayAlias,
+                        table.SchemaObject.BaseIdentifier.Value,
+                        PreservePhysicalTableId: false);
+                    if (!string.Equals(
+                        sourceAlias,
+                        displayAlias,
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        renamedAliases[sourceAlias] = displayAlias;
+                        collidingAliases.Add(sourceAlias);
+                    }
+                }
+
+                assignments.Add(new BranchAliasAssignment(
+                    branch,
+                    tableBindings,
+                    renamedAliases));
+            }
+
+            var branchAliases = assignments
+                .Select(assignment => new BranchDisplayAliases(
+                    assignment.Query,
+                    new DisplayAliasContext(
+                        assignment.TableBindings.ToDictionary(
+                            item => item.Key,
+                            item => item.Value with
+                            {
+                                PreservePhysicalTableId = collidingAliases.Contains(
+                                    item.Value.SourceAlias)
+                            }),
+                        DisplayAliasReferenceCollector.Collect(
+                            assignment.Query,
+                            assignment.RenamedAliases))))
+                .ToArray();
+            return new BinaryDisplayAliasPlan(branchAliases);
+        }
+
+        public DisplayAliasContext? ContextFor(QuerySpecification query)
+        {
+            return branches
+                .FirstOrDefault(item => ReferenceEquals(item.Query, query))
+                ?.Aliases;
+        }
+
+        public DisplayAliasContext? ContextContaining(TSqlFragment fragment)
+        {
+            return branches
+                .Where(item => ContainsFragment(item.Query, fragment))
+                .OrderBy(item => item.Query.FragmentLength)
+                .FirstOrDefault()
+                ?.Aliases;
+        }
+
+        private static string AllocateDisplayAlias(ISet<string> reservedAliases)
+        {
+            for (var number = 1; ; number++)
+            {
+                var candidate = $"tb{number}";
+                if (reservedAliases.Add(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        private static string PhysicalTableIdentity(NamedTableReference table)
+        {
+            return string.Join(
+                ".",
+                table.SchemaObject.Identifiers.Select(identifier => identifier.Value));
+        }
+    }
+
+    /// <summary>
+    /// 1分岐内で元SQL位置と表示用別名を対応付け
+    /// </summary>
+    private sealed class DisplayAliasContext
+    {
+        private readonly IReadOnlyDictionary<int, DisplayAliasBinding> tableBindings;
+        private readonly IReadOnlyDictionary<string, DisplayAliasBinding> bindingsBySourceAlias;
+
+        public DisplayAliasContext(
+            IReadOnlyDictionary<int, DisplayAliasBinding> tableBindings,
+            IReadOnlyList<SqlTextReplacement> replacements)
+            : this(
+                tableBindings,
+                tableBindings.Values
+                    .GroupBy(binding => binding.SourceAlias, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.Last(),
+                        StringComparer.OrdinalIgnoreCase),
+                replacements)
+        {
+        }
+
+        private DisplayAliasContext(
+            IReadOnlyDictionary<int, DisplayAliasBinding> tableBindings,
+            IReadOnlyDictionary<string, DisplayAliasBinding> bindingsBySourceAlias,
+            IReadOnlyList<SqlTextReplacement> replacements)
+        {
+            this.tableBindings = tableBindings;
+            this.bindingsBySourceAlias = bindingsBySourceAlias;
+            Replacements = replacements;
+        }
+
+        public IReadOnlyList<SqlTextReplacement> Replacements { get; }
+
+        public string DisplayAliasFor(NamedTableReference table)
+        {
+            return tableBindings.TryGetValue(table.StartOffset, out var binding)
+                ? binding.DisplayAlias
+                : table.Alias?.Value ?? table.SchemaObject.BaseIdentifier.Value;
+        }
+
+        public string DisplayAliasFor(string tableId)
+        {
+            return bindingsBySourceAlias.TryGetValue(tableId, out var binding)
+                ? binding.DisplayAlias
+                : tableId;
+        }
+
+        public string? PhysicalTableIdFor(string tableId)
+        {
+            return bindingsBySourceAlias.TryGetValue(tableId, out var binding)
+                ? binding.PhysicalTableId
+                : null;
+        }
+
+        public bool ShouldPreservePhysicalTableId(string tableId)
+        {
+            return bindingsBySourceAlias.TryGetValue(tableId, out var binding) &&
+                binding.PreservePhysicalTableId;
+        }
+
+        public bool ShouldPreservePhysicalTableId(NamedTableReference table)
+        {
+            return tableBindings.TryGetValue(table.StartOffset, out var binding) &&
+                binding.PreservePhysicalTableId;
+        }
+
+        public static DisplayAliasContext? Combine(
+            DisplayAliasContext? outer,
+            DisplayAliasContext? inner)
+        {
+            if (outer is null)
+            {
+                return inner;
+            }
+            if (inner is null)
+            {
+                return outer;
+            }
+
+            var combinedTableBindings = new Dictionary<int, DisplayAliasBinding>(
+                outer.tableBindings);
+            foreach (var item in inner.tableBindings)
+            {
+                combinedTableBindings[item.Key] = item.Value;
+            }
+
+            var combinedBindingsBySourceAlias = new Dictionary<string, DisplayAliasBinding>(
+                outer.bindingsBySourceAlias,
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var item in inner.bindingsBySourceAlias)
+            {
+                combinedBindingsBySourceAlias[item.Key] = item.Value;
+            }
+
+            var combinedReplacements = outer.Replacements
+                .Concat(inner.Replacements)
+                .GroupBy(item => item.Offset)
+                .Select(group => group.Last())
+                .OrderBy(item => item.Offset)
+                .ToArray();
+            return new DisplayAliasContext(
+                combinedTableBindings,
+                combinedBindingsBySourceAlias,
+                combinedReplacements);
+        }
+    }
+
+    /// <summary>
+    /// 分岐のローカルスコープを尊重して列修飾子の置換位置を収集
+    /// </summary>
+    private sealed class DisplayAliasReferenceCollector : TSqlFragmentVisitor
+    {
+        private readonly QuerySpecification root;
+        private readonly List<SqlTextReplacement> replacements = [];
+        private IReadOnlyDictionary<string, string> activeAliases;
+
+        private DisplayAliasReferenceCollector(
+            QuerySpecification root,
+            IReadOnlyDictionary<string, string> renamedAliases)
+        {
+            this.root = root;
+            activeAliases = renamedAliases;
+        }
+
+        public static IReadOnlyList<SqlTextReplacement> Collect(
+            QuerySpecification query,
+            IReadOnlyDictionary<string, string> renamedAliases)
+        {
+            if (renamedAliases.Count == 0)
+            {
+                return [];
+            }
+
+            var collector = new DisplayAliasReferenceCollector(query, renamedAliases);
+            query.Accept(collector);
+            return collector.replacements
+                .GroupBy(item => item.Offset)
+                .Select(group => group.Last())
+                .OrderBy(item => item.Offset)
+                .ToArray();
+        }
+
+        public override void ExplicitVisit(QuerySpecification node)
+        {
+            var previousAliases = activeAliases;
+            if (!ReferenceEquals(node, root))
+            {
+                var localAliases = (node.FromClause?.TableReferences
+                    .SelectMany(EnumerateTableIdentifiers) ?? [])
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                activeAliases = previousAliases
+                    .Where(item => !localAliases.Contains(item.Key))
+                    .ToDictionary(
+                        item => item.Key,
+                        item => item.Value,
+                        StringComparer.OrdinalIgnoreCase);
+            }
+
+            base.ExplicitVisit(node);
+            activeAliases = previousAliases;
+        }
+
+        public override void ExplicitVisit(ColumnReferenceExpression node)
+        {
+            var identifiers = node.MultiPartIdentifier?.Identifiers;
+            if (identifiers is { Count: >= 2 })
+            {
+                AddReplacement(identifiers[^2]);
+            }
+            base.ExplicitVisit(node);
+        }
+
+        public override void ExplicitVisit(SelectStarExpression node)
+        {
+            var identifiers = node.Qualifier?.Identifiers;
+            if (identifiers is { Count: > 0 })
+            {
+                AddReplacement(identifiers[^1]);
+            }
+            base.ExplicitVisit(node);
+        }
+
+        private void AddReplacement(Identifier identifier)
+        {
+            if (activeAliases.TryGetValue(identifier.Value, out var displayAlias))
+            {
+                replacements.Add(new SqlTextReplacement(
+                    identifier.StartOffset,
+                    identifier.FragmentLength,
+                    DisplayIdentifier(displayAlias, identifier.QuoteType)));
+            }
+        }
+
+        private static string DisplayIdentifier(string value, QuoteType quoteType)
+        {
+            return quoteType switch
+            {
+                QuoteType.SquareBracket => $"[{value.Replace("]", "]]", StringComparison.Ordinal)}]",
+                QuoteType.DoubleQuote => $"\"{value.Replace("\"", "\"\"", StringComparison.Ordinal)}\"",
+                _ => value
+            };
+        }
+    }
+
+    /// <summary>
+    /// 複合クエリ内で使用済みの実表名・別名・派生表別名を収集
+    /// </summary>
+    private sealed class UsedTableIdentifierCollector : TSqlFragmentVisitor
+    {
+        private readonly HashSet<string> identifiers = new(
+            StringComparer.OrdinalIgnoreCase);
+
+        public static HashSet<string> Collect(
+            IEnumerable<QuerySpecification> queryBranches)
+        {
+            var collector = new UsedTableIdentifierCollector();
+            foreach (var branch in queryBranches)
+            {
+                branch.Accept(collector);
+            }
+            return collector.identifiers;
+        }
+
+        public override void ExplicitVisit(NamedTableReference node)
+        {
+            identifiers.Add(node.Alias?.Value ?? node.SchemaObject.BaseIdentifier.Value);
+            base.ExplicitVisit(node);
+        }
+
+        public override void ExplicitVisit(QueryDerivedTable node)
+        {
+            if (node.Alias is not null)
+            {
+                identifiers.Add(node.Alias.Value);
+            }
+            base.ExplicitVisit(node);
+        }
+
+        public override void ExplicitVisit(InlineDerivedTable node)
+        {
+            if (node.Alias is not null)
+            {
+                identifiers.Add(node.Alias.Value);
+            }
+            base.ExplicitVisit(node);
+        }
+    }
+
+    private sealed class DisplayAliasScope(DisplayAliasContext? previous) : IDisposable
+    {
+        private bool disposed;
+
+        public void Dispose()
+        {
+            if (disposed)
+            {
+                return;
+            }
+
+            CurrentDisplayAliases.Value = previous;
+            disposed = true;
+        }
+    }
+
+    private sealed record BranchAliasAssignment(
+        QuerySpecification Query,
+        IReadOnlyDictionary<int, DisplayAliasBinding> TableBindings,
+        IReadOnlyDictionary<string, string> RenamedAliases);
+
+    private sealed record DisplayAliasBinding(
+        string SourceAlias,
+        string DisplayAlias,
+        string PhysicalTableId,
+        bool PreservePhysicalTableId);
+
+    private sealed record BranchDisplayAliases(
+        QuerySpecification Query,
+        DisplayAliasContext Aliases);
+
     private sealed class UnsupportedOutputException(
         string message,
         TSqlFragment? fragment = null) : Exception(message)
@@ -4455,7 +5088,8 @@ public static class OutputSheetPlanBuilder
         string Method,
         ScalarExpression? Expression = null,
         bool RenderCaseInMethod = false,
-        IReadOnlyList<ScalarExpression>? DirectCases = null);
+        IReadOnlyList<ScalarExpression>? DirectCases = null,
+        DisplayAliasContext? DisplayAliases = null);
 
     private sealed record ConditionPart(string Connector, BooleanExpression Expression);
 

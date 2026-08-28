@@ -128,6 +128,7 @@ try {
         'AnalyzeQueries_RendersMatchedInputAndOutputTables',
         'AnalyzeQueries_ClassifiesModificationTargetsByRole',
         'AnalyzeQueries_UsesOutputTwoNameForExactMissingReference',
+        'AnalyzeQueries_RenamesDuplicateUnionAliases',
         'AnalyzeQueries_RendersSupportedTablesDuringPartialFallback',
         'AnalyzeQueries_SortsOutputTwoByCompositeTableNumber',
         'AnalyzeQueries_LeavesOutputTwoHeaderOnlyOnFallback',

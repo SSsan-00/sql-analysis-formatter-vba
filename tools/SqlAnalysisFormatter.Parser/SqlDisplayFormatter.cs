@@ -3,6 +3,11 @@ using System.Text.RegularExpressions;
 
 namespace SqlAnalysisFormatter.Parser;
 
+internal readonly record struct SqlTextReplacement(
+    int Offset,
+    int Length,
+    string Value);
+
 /// <summary>
 /// ASTで識別したSQL断片を帳票向けの表記へ整形
 /// </summary>
@@ -16,7 +21,8 @@ internal static class SqlDisplayFormatter
         TSqlFragment fragment,
         bool uppercaseDateParts = false,
         bool compactUnarySigns = false,
-        bool uppercaseOffsetKeywords = false)
+        bool uppercaseOffsetKeywords = false,
+        IReadOnlyList<SqlTextReplacement>? additionalReplacements = null)
     {
         if (fragment.StartOffset < 0 || fragment.FragmentLength <= 0 ||
             fragment.StartOffset + fragment.FragmentLength > sql.Length)
@@ -38,7 +44,10 @@ internal static class SqlDisplayFormatter
             replacement.Value.CopyTo(0, characters, relativeOffset, replacement.Value.Length);
         }
 
-        text = new string(characters);
+        text = ApplyAdditionalReplacements(
+            new string(characters),
+            fragment,
+            additionalReplacements);
         if (uppercaseDateParts)
         {
             text = Regex.Replace(
@@ -58,6 +67,40 @@ internal static class SqlDisplayFormatter
         }
 
         return text.Trim();
+    }
+
+    /// <summary>
+    /// AST上の絶対位置を使い、長さが変わる表示専用置換を後方から適用
+    /// </summary>
+    private static string ApplyAdditionalReplacements(
+        string text,
+        TSqlFragment fragment,
+        IReadOnlyList<SqlTextReplacement>? replacements)
+    {
+        if (replacements is null || replacements.Count == 0)
+        {
+            return text;
+        }
+
+        foreach (var replacement in replacements
+            .Where(item =>
+                item.Offset >= fragment.StartOffset &&
+                item.Offset + item.Length <= fragment.StartOffset + fragment.FragmentLength)
+            .OrderByDescending(item => item.Offset))
+        {
+            var relativeOffset = replacement.Offset - fragment.StartOffset;
+            if (relativeOffset < 0 ||
+                replacement.Length <= 0 ||
+                relativeOffset + replacement.Length > text.Length)
+            {
+                continue;
+            }
+
+            text = text.Remove(relativeOffset, replacement.Length)
+                .Insert(relativeOffset, replacement.Value);
+        }
+
+        return text;
     }
 
     /// <summary>

@@ -34,6 +34,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_RendersMatchedInputAndOutputTables
     AnalyzeQueries_ClassifiesModificationTargetsByRole
     AnalyzeQueries_UsesOutputTwoNameForExactMissingReference
+    AnalyzeQueries_RenamesDuplicateUnionAliases
     AnalyzeQueries_RendersSupportedTablesDuringPartialFallback
     AnalyzeQueries_SortsOutputTwoByCompositeTableNumber
     AnalyzeQueries_LeavesOutputTwoHeaderOnlyOnFallback
@@ -716,6 +717,48 @@ Public Sub AnalyzeQueries_UsesOutputTwoNameForExactMissingReference()
     AssertCellValue wsOutputTwo.Range("C5"), "orders"
     AssertCellValue wsOutputTwo.Range("S6"), ""
     AssertCellValue wsOutputTwo.Range("S7"), "table-list location"
+    wsTableList.Range("A2:C200").ClearContents
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' UNION分岐で異なる物理表が同じ別名を使う場合に表示別名と物理表一覧を分離することを確認
+Public Sub AnalyzeQueries_RenamesDuplicateUnionAliases()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim wsOutputTwo As Worksheet
+    Dim wsTableList As Worksheet
+    Dim expectedReference As String
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+    Set wsOutputTwo = ThisWorkbook.Worksheets(OutputSheetTwoName())
+    Set wsTableList = ThisWorkbook.Worksheets(TableListSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    wsTableList.Range("A2:C200").ClearContents
+    PutTableListRow wsTableList, 2, "city1", "city one", "1-1"
+    PutTableListRow wsTableList, 3, "city2", "city two", "1-2"
+    wsSql.Cells(2, COL_SQL).Value = "SELECT tb1.* FROM city1 AS tb1"
+    wsSql.Cells(3, COL_SQL).Value = "UNION"
+    wsSql.Cells(4, COL_SQL).Value = "SELECT tb1.* FROM city2 AS tb1;"
+
+    AnalyzeQueries False
+
+    expectedReference = ReferenceTablesText() & ": city one[tb1]" & _
+        W(&H3001) & "city two[tb2]"
+    AssertCellValue wsOutput.Cells(2, 1), expectedReference
+    AssertCellValue wsOutput.Cells(3, 17), "tb1." & W(&H5168, &H9805, &H76EE)
+    AssertCellValue wsOutput.Cells(5, 17), "tb2." & W(&H5168, &H9805, &H76EE)
+    AssertOutputTwoRow wsOutputTwo, 4, 1, "city1", "city one", "1-1"
+    AssertOutputTwoRow wsOutputTwo, 5, 1, "city2", "city two", "1-2"
+    AssertCellValue wsOutputTwo.Range("BC4"), ""
     wsTableList.Range("A2:C200").ClearContents
 End Sub
 

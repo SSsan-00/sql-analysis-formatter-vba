@@ -2042,6 +2042,221 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
+    /// UNION分岐で同じ別名が異なる物理表を指す場合は表示別名を一意化
+    /// </summary>
+    [TestMethod]
+    public void Build_RenamesDuplicateUnionAliasesByPhysicalTable()
+    {
+        const string sql = """
+            SELECT tb1.* FROM city1 AS tb1
+            UNION
+            SELECT tb1.* FROM city2 AS tb1
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "都市1", "id", "ID"),
+            new("city2", "都市2", "id", "ID"),
+            new("tb2", "無関係", "id", "ID")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(
+            "参照テーブル: 都市1[tb1]、都市2[tb2]",
+            CellValue(plan, 2, 1));
+        Assert.AreEqual("tb1.全項目", CellValue(plan, 3, 17));
+        Assert.AreEqual("tb2.全項目", CellValue(plan, 5, 17));
+        CollectionAssert.AreEqual(
+            new[] { "city1", "city2" },
+            plan.InputTableIds.ToArray());
+        Assert.IsEmpty(plan.OutputTableIds);
+    }
+
+    /// <summary>
+    /// INTERSECTとEXCEPTでも分岐をまたぐ別名衝突を同じ規則で解消
+    /// </summary>
+    [TestMethod]
+    [DataRow("INTERSECT")]
+    [DataRow("EXCEPT")]
+    public void Build_RenamesDuplicateAliasesAcrossCompoundOperators(string operation)
+    {
+        var sql = $"SELECT tb1.id FROM city1 AS tb1 {operation} " +
+            "SELECT tb1.id FROM city2 AS tb1";
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(
+            "参照テーブル: (和名未取得)[city1][tb1]、" +
+            "(和名未取得)[city2][tb2]",
+            CellValue(plan, 2, 1));
+        Assert.IsTrue(plan.Cells.Any(cell => cell.Value == $"＜{operation}＞"));
+        Assert.AreEqual("tb2.id", CellValue(plan, 5, 17));
+        CollectionAssert.AreEqual(
+            new[] { "city1", "city2" },
+            plan.InputTableIds.ToArray());
+    }
+
+    /// <summary>
+    /// 採番時は全分岐で既に使われている別名を避け、SQLリテラルは変更しない
+    /// </summary>
+    [TestMethod]
+    public void Build_SkipsReservedUnionAliasesAndRewritesAllRenderedClauses()
+    {
+        const string sql = """
+            SELECT tb1.id
+            FROM city1 AS tb1
+            WHERE tb1.status = 1
+            UNION ALL
+            SELECT CASE WHEN tb1.status = 2 THEN tb1.id ELSE tb2.id END AS id
+            FROM city2 AS tb1
+            JOIN region AS tb2 ON tb2.id = tb1.region_id
+            WHERE tb1.code = 'tb1.code'
+            GROUP BY tb1.status, tb1.id, tb2.id
+            HAVING COUNT(tb1.id) > 0
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(
+            sql,
+            [new("region", "地域", "id", "ID")]);
+        var values = plan.Cells.Select(cell => cell.Value).ToArray();
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(
+            "参照テーブル: (和名未取得)[city1][tb1]、" +
+            "(和名未取得)[city2][tb3]、(和名未取得)[tb2]",
+            CellValue(plan, 2, 1));
+        Assert.IsTrue(values.Contains("tb3.status = 2 → tb3.id"));
+        Assert.IsTrue(values.Contains(
+            "＜(和名未取得)[city2][tb3] INNER JOIN (和名未取得)[tb2]＞"));
+        Assert.IsTrue(values.Contains("tb2.id = tb3.region_id"));
+        Assert.IsTrue(values.Contains("tb3.code = 'tb1.code'"));
+        Assert.IsTrue(values.Contains("tb3.status"));
+        Assert.IsTrue(values.Contains("COUNT(tb3.id) > 0"));
+    }
+
+    /// <summary>
+    /// 同じ別名が同じ物理表を指すだけなら元の別名と従来表示を維持
+    /// </summary>
+    [TestMethod]
+    public void Build_KeepsDuplicateUnionAliasForSamePhysicalTable()
+    {
+        const string sql = """
+            SELECT tb1.id FROM city1 AS tb1
+            UNION
+            SELECT tb1.id FROM city1 AS tb1
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.AreEqual(
+            "参照テーブル: (和名未取得)[tb1]",
+            CellValue(plan, 2, 1));
+        Assert.AreEqual("tb1.id", CellValue(plan, 3, 17));
+        Assert.AreEqual("tb1.id", CellValue(plan, 5, 17));
+        CollectionAssert.AreEqual(new[] { "city1" }, plan.InputTableIds.ToArray());
+    }
+
+    /// <summary>
+    /// 既存の連番をすべて避け、桁数が変わる表示別名もAST位置で置換
+    /// </summary>
+    [TestMethod]
+    public void Build_AllocatesMultiDigitUnionDisplayAlias()
+    {
+        const string sql = """
+            SELECT tb1.id FROM city1 AS tb1
+            UNION
+            SELECT tb1.id
+            FROM city2 AS tb1
+            JOIN reserved2 AS tb2 ON tb2.id = tb1.id
+            JOIN reserved3 AS tb3 ON tb3.id = tb1.id
+            JOIN reserved4 AS tb4 ON tb4.id = tb1.id
+            JOIN reserved5 AS tb5 ON tb5.id = tb1.id
+            JOIN reserved6 AS tb6 ON tb6.id = tb1.id
+            JOIN reserved7 AS tb7 ON tb7.id = tb1.id
+            JOIN reserved8 AS tb8 ON tb8.id = tb1.id
+            JOIN reserved9 AS tb9 ON tb9.id = tb1.id
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        StringAssert.Contains(CellValue(plan, 2, 1), "(和名未取得)[city2][tb10]");
+        Assert.AreEqual("tb10.id", CellValue(plan, 5, 17));
+    }
+
+    /// <summary>
+    /// 引用された元別名は採番後も同じ引用形式で列修飾子へ表示
+    /// </summary>
+    [TestMethod]
+    public void Build_PreservesQuotedUnionAliasStyleWhenRenaming()
+    {
+        const string sql = """
+            SELECT [tb1].[id] FROM city1 AS [tb1]
+            UNION
+            SELECT [tb1].[id] FROM city2 AS [tb1]
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.AreEqual("[tb1].[id]", CellValue(plan, 3, 17));
+        Assert.AreEqual("[tb2].[id]", CellValue(plan, 5, 17));
+    }
+
+    /// <summary>
+    /// 並列解析でも表示用別名の描画スコープをほかの計画へ漏らさない
+    /// </summary>
+    [TestMethod]
+    public void Build_KeepsConcurrentUnionDisplayAliasScopesIndependent()
+    {
+        var results = new string?[32];
+
+        Parallel.For(0, results.Length, index =>
+        {
+            var sql = $"SELECT source.id FROM city{index}_a AS source " +
+                $"UNION SELECT source.id FROM city{index}_b AS source";
+            var plan = OutputSheetPlanBuilder.Build(sql, []);
+            results[index] = CellValue(plan, 5, 17);
+        });
+
+        Assert.IsTrue(results.All(value => value == "tb1.id"));
+    }
+
+    /// <summary>
+    /// UNION分岐内の相関参照は採番し、内側で再定義した同名別名は維持
+    /// </summary>
+    [TestMethod]
+    public void Build_RenamesCorrelatedUnionAliasButPreservesNestedShadow()
+    {
+        const string sql = """
+            SELECT tb1.id FROM city1 AS tb1
+            UNION
+            SELECT tb1.id
+            FROM city2 AS tb1
+            WHERE EXISTS (
+                SELECT 1 FROM audit AS a WHERE a.city_id = tb1.id
+            )
+            AND EXISTS (
+                SELECT 1 FROM audit AS tb1 WHERE tb1.city_id = 1
+            )
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+        var values = plan.Cells.Select(cell => cell.Value).ToArray();
+
+        Assert.IsTrue(values.Contains("a.city_id = tb2.id"));
+        Assert.IsTrue(values.Contains("tb1.city_id = 1"));
+        Assert.IsTrue(values.Contains("EXISTS (SQ1)"));
+        Assert.IsTrue(values.Contains("EXISTS (SQ2)"));
+        Assert.IsTrue(values.Contains(
+            "参照テーブル: (和名未取得)[city2][tb2]、(和名未取得)[a]"));
+        Assert.IsTrue(values.Contains("参照テーブル: (和名未取得)[tb1]"));
+        Assert.IsFalse(values.Any(value => value.Contains(
+            "SELECT 1 FROM audit",
+            StringComparison.OrdinalIgnoreCase)));
+    }
+
+    /// <summary>
     /// INSERT対象列を省略した場合はSELECT取得項目名を同じ位置の移送先として扱うことを確認
     /// </summary>
     [TestMethod]
@@ -2327,6 +2542,41 @@ public sealed class OutputSheetPlanBuilderTests
             section.Kind == OutputSectionKind.Transfer &&
             section.StartRow == 18 &&
             section.EndRow == 20));
+    }
+
+    /// <summary>
+    /// INSERT UNIONのSELECT表と移送パターンで同じ表示用別名を共有
+    /// </summary>
+    [TestMethod]
+    public void Build_RenamesDuplicateAliasesInInsertUnionTransferPatterns()
+    {
+        const string sql = """
+            INSERT INTO city_archive(id)
+            SELECT tb1.id FROM city1 AS tb1
+            UNION ALL
+            SELECT tb1.id FROM city2 AS tb1
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("city_archive", "都市履歴", "id", "ID"),
+            new("city1", "都市1", "id", "ID"),
+            new("city2", "都市2", "id", "ID")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+        var values = plan.Cells.Select(cell => cell.Value).ToArray();
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.IsTrue(values.Contains("参照テーブル: 都市1[tb1]、都市2[tb2]"));
+        Assert.IsTrue(values.Contains("参照テーブル: 都市履歴、都市1[tb1]、都市2[tb2]"));
+        Assert.IsTrue(values.Contains("tb1.id"));
+        Assert.IsTrue(values.Contains("tb2.id"));
+        CollectionAssert.AreEqual(
+            new[] { "city1", "city2" },
+            plan.InputTableIds.ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "city_archive" },
+            plan.OutputTableIds.ToArray());
     }
 
     /// <summary>
