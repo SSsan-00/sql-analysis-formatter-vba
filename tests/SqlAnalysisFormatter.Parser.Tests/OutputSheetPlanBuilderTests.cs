@@ -2080,6 +2080,45 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
+    /// 採番先が既存の物理表名を避けても、人工別名ではなく各物理表IDから和名を解決
+    /// </summary>
+    [TestMethod]
+    public void Build_ResolvesSyntheticUnionAliasNameFromPhysicalTableId()
+    {
+        const string sql = """
+            SELECT 1 FROM a AS tb1
+            UNION
+            SELECT 1 FROM b AS tb1
+            UNION
+            SELECT 1 FROM tb2
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("a", "テーブルA", "", ""),
+            new("b", "テーブルB", "", ""),
+            new("tb2", "テーブルC", "", ""),
+            new("tb3", "無関係な定義", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(
+            "参照テーブル: テーブルA[tb1]、テーブルB[tb3]、テーブルC[tb2]",
+            CellValue(plan, 2, 1));
+        Assert.AreEqual(
+            "SELECT 1 FROM a AS tb1\n" +
+            "UNION\n" +
+            "SELECT 1 FROM b AS tb3\n" +
+            "UNION\n" +
+            "SELECT 1 FROM tb2",
+            string.Join('\n', plan.TransformedQueryLines.Select(line => line.Value)));
+        CollectionAssert.AreEqual(
+            new[] { "a", "b", "tb2" },
+            plan.InputTableIds.ToArray());
+    }
+
+    /// <summary>
     /// SQL解析B列ではUNION分岐の別名宣言と束縛済み参照を同じ表示別名へ変更
     /// </summary>
     [TestMethod]

@@ -35,6 +35,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_ClassifiesModificationTargetsByRole
     AnalyzeQueries_UsesOutputTwoNameForExactMissingReference
     AnalyzeQueries_RenamesDuplicateUnionAliases
+    AnalyzeQueries_ResolvesSyntheticUnionAliasNames
     AnalyzeQueries_PreservesBothUnionAliasesInOneSqlRow
     AnalyzeQueries_RendersSupportedTablesDuringPartialFallback
     AnalyzeQueries_SortsOutputTwoByCompositeTableNumber
@@ -773,6 +774,61 @@ Public Sub AnalyzeQueries_RenamesDuplicateUnionAliases()
     AssertOutputTwoRow wsOutputTwo, 4, 1, "city1", "city one", "1-1"
     AssertOutputTwoRow wsOutputTwo, 5, 1, "city2", "city two", "1-2"
     AssertCellValue wsOutputTwo.Range("BC4"), ""
+    wsTableList.Range("A2:C200").ClearContents
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' 採番済みUNION別名の和名を物理表IDの変換定義またはテーブル一覧から解決することを確認
+Public Sub AnalyzeQueries_ResolvesSyntheticUnionAliasNames()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim wsOutputTwo As Worksheet
+    Dim wsTableList As Worksheet
+    Dim expectedReference As String
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+    Set wsOutputTwo = ThisWorkbook.Worksheets(OutputSheetTwoName())
+    Set wsTableList = ThisWorkbook.Worksheets(TableListSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    wsTableList.Range("A2:C200").ClearContents
+    PutDefinition wsRef, 2, "a", "table A", "", ""
+    PutDefinition wsRef, 3, "b", "table B", "", ""
+    PutDefinition wsRef, 4, "tb2", "table C", "", ""
+    PutDefinition wsRef, 5, "tb3", "unrelated definition", "", ""
+    PutTableListRow wsTableList, 2, "a", "table A", "1-1"
+    PutTableListRow wsTableList, 3, "b", "table B", "1-2"
+    PutTableListRow wsTableList, 4, "tb2", "table C", "1-3"
+    wsSql.Cells(2, COL_SQL).Value = "SELECT 1 FROM a tb1"
+    wsSql.Cells(3, COL_SQL).Value = "UNION"
+    wsSql.Cells(4, COL_SQL).Value = "SELECT 1 FROM b tb1"
+    wsSql.Cells(5, COL_SQL).Value = "UNION"
+    wsSql.Cells(6, COL_SQL).Value = "SELECT 1 FROM tb2;"
+
+    AnalyzeQueries False
+
+    expectedReference = ReferenceTablesText() & ": table A[tb1]" & _
+        W(&H3001) & "table B[tb3]" & W(&H3001) & "table C[tb2]"
+    AssertCellValue wsOutput.Cells(2, 1), expectedReference
+    AssertCellValue wsSql.Cells(2, COL_RESULT), "SELECT 1 FROM a tb1"
+    AssertCellValue wsSql.Cells(4, COL_RESULT), "SELECT 1 FROM b tb3"
+    AssertCellValue wsSql.Cells(6, COL_RESULT), "SELECT 1 FROM tb2;"
+    AssertOutputTwoRow wsOutputTwo, 4, 1, "a", "table A", "1-1"
+    AssertOutputTwoRow wsOutputTwo, 5, 1, "b", "table B", "1-2"
+    AssertOutputTwoRow wsOutputTwo, 6, 1, "tb2", "table C", "1-3"
+
+    ' 物理表bの変換定義がなくてもテーブル一覧の名称で同じ表示へ補完する
+    wsRef.Range("A3:D3").ClearContents
+    AnalyzeQueries False
+    AssertCellValue wsOutput.Cells(2, 1), expectedReference
     wsTableList.Range("A2:C200").ClearContents
 End Sub
 
