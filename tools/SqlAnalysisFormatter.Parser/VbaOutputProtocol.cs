@@ -7,7 +7,7 @@ namespace SqlAnalysisFormatter.Parser;
 /// </summary>
 public static class VbaOutputProtocol
 {
-    private const string PlanHeader = "SAF_OUTPUT_PLAN\t4";
+    private const string PlanHeader = "SAF_OUTPUT_PLAN\t5";
     private const string MappingHeaderV1 = "SAF_MAPPINGS\t1";
     private const string MappingHeaderV2 = "SAF_MAPPINGS\t2";
 
@@ -36,6 +36,13 @@ public static class VbaOutputProtocol
             .ThenBy(item => item.Order)
             .Select(item =>
                 $"Q\t{item.QueryLine}\t{item.Order}\t{Escape(item.OriginalValue)}\t{Escape(item.QualifiedValue)}"));
+        lines.AddRange(plan.TransformedQueryLines
+            .OrderBy(item => item.QueryLine)
+            .Select(item => $"R\t{item.QueryLine}\t{Escape(item.Value)}"));
+        lines.AddRange(plan.ReplacementValues
+            .OrderBy(item => item.QueryLine)
+            .ThenBy(item => item.Order)
+            .Select(item => $"V\t{item.QueryLine}\t{item.Order}\t{Escape(item.Value)}"));
         lines.AddRange(plan.InputTableIds.Select(tableId => $"T\tINPUT\t{Escape(tableId)}"));
         lines.AddRange(plan.OutputTableIds.Select(tableId => $"T\tOUTPUT\t{Escape(tableId)}"));
         lines.AddRange(plan.Sections.Select(section =>

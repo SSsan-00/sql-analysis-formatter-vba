@@ -35,6 +35,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_ClassifiesModificationTargetsByRole
     AnalyzeQueries_UsesOutputTwoNameForExactMissingReference
     AnalyzeQueries_RenamesDuplicateUnionAliases
+    AnalyzeQueries_PreservesBothUnionAliasesInOneSqlRow
     AnalyzeQueries_RendersSupportedTablesDuringPartialFallback
     AnalyzeQueries_SortsOutputTwoByCompositeTableNumber
     AnalyzeQueries_LeavesOutputTwoHeaderOnlyOnFallback
@@ -336,6 +337,8 @@ Public Sub SetupWorkbook_CreatesStableSqlActionButtons()
     Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
 
     AssertSqlActionButtons wsSql
+    AssertCellValue wsSql.Cells(1, COL_RESULT), _
+        W(&H5909, &H63DB, &H5F8C, &H30AF, &H30A8, &H30EA)
 End Sub
 
 '@TestMethod("AnalyzeQueries")
@@ -729,6 +732,7 @@ Public Sub AnalyzeQueries_RenamesDuplicateUnionAliases()
     Dim wsOutputTwo As Worksheet
     Dim wsTableList As Worksheet
     Dim expectedReference As String
+    Dim cityName As String
 
     If Not ExternalParserConfigured() Then Exit Sub
 
@@ -743,23 +747,71 @@ Public Sub AnalyzeQueries_RenamesDuplicateUnionAliases()
     wsSql.Range("A2:Z200").ClearContents
     wsOutput.Cells.ClearContents
     wsTableList.Range("A2:C200").ClearContents
+    cityName = W(&H90FD, &H5E02, &H540D)
+    PutDefinition wsRef, 2, "tb1", "city one", "name", cityName
+    PutDefinition wsRef, 3, "city2", "city two", "__unused__", "unused"
     PutTableListRow wsTableList, 2, "city1", "city one", "1-1"
     PutTableListRow wsTableList, 3, "city2", "city two", "1-2"
-    wsSql.Cells(2, COL_SQL).Value = "SELECT tb1.* FROM city1 AS tb1"
+    wsSql.Cells(2, COL_SQL).Value = "SELECT tb1.name FROM city1 AS tb1"
     wsSql.Cells(3, COL_SQL).Value = "UNION"
-    wsSql.Cells(4, COL_SQL).Value = "SELECT tb1.* FROM city2 AS tb1;"
+    wsSql.Cells(4, COL_SQL).Value = "SELECT tb1.name FROM city2 AS tb1;"
 
     AnalyzeQueries False
 
     expectedReference = ReferenceTablesText() & ": city one[tb1]" & _
         W(&H3001) & "city two[tb2]"
     AssertCellValue wsOutput.Cells(2, 1), expectedReference
-    AssertCellValue wsOutput.Cells(3, 17), "tb1." & W(&H5168, &H9805, &H76EE)
-    AssertCellValue wsOutput.Cells(5, 17), "tb2." & W(&H5168, &H9805, &H76EE)
+    AssertCellValue wsOutput.Cells(3, 17), "tb1." & cityName
+    AssertCellValue wsOutput.Cells(5, 17), "tb2." & cityName
+    AssertCellValue wsSql.Cells(2, COL_RESULT), _
+        "SELECT tb1." & cityName & " FROM city1 AS tb1"
+    AssertCellValue wsSql.Cells(3, COL_RESULT), "UNION"
+    AssertCellValue wsSql.Cells(4, COL_RESULT), _
+        "SELECT tb2." & cityName & " FROM city2 AS tb2;"
+    AssertCellValue wsSql.Cells(2, COL_REPLACEMENT), "tb1." & cityName
+    AssertCellValue wsSql.Cells(4, COL_REPLACEMENT), "tb2." & cityName
     AssertOutputTwoRow wsOutputTwo, 4, 1, "city1", "city one", "1-1"
     AssertOutputTwoRow wsOutputTwo, 5, 1, "city2", "city two", "1-2"
     AssertCellValue wsOutputTwo.Range("BC4"), ""
     wsTableList.Range("A2:C200").ClearContents
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' 同じSQL解析行にあるUNION両分岐の最終別名をB列とC列へ共存させることを確認
+Public Sub AnalyzeQueries_PreservesBothUnionAliasesInOneSqlRow()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim cityName As String
+    Dim inputSql As String
+    Dim expectedSql As String
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    cityName = W(&H90FD, &H5E02, &H540D)
+    PutDefinition wsRef, 2, "tb1", "city one", "name", cityName
+    PutDefinition wsRef, 3, "city2", "city two", "__unused__", "unused"
+    inputSql = "SELECT tb1.name FROM city1 AS tb1" & vbLf & _
+        "UNION" & vbLf & _
+        "SELECT tb1.name FROM city2 AS tb1;" & vbLf
+    expectedSql = "SELECT tb1." & cityName & " FROM city1 AS tb1" & vbLf & _
+        "UNION" & vbLf & _
+        "SELECT tb2." & cityName & " FROM city2 AS tb2;" & vbLf
+    wsSql.Cells(2, COL_SQL).Value = inputSql
+
+    AnalyzeQueries False
+
+    AssertCellValue wsSql.Cells(2, COL_RESULT), expectedSql
+    AssertCellValue wsSql.Cells(2, COL_REPLACEMENT), "tb1." & cityName
+    AssertCellValue wsSql.Cells(2, COL_REPLACEMENT + 1), "tb2." & cityName
 End Sub
 
 '@TestMethod("AnalyzeQueries")
@@ -1662,6 +1714,8 @@ Public Sub AnalyzeQueries_QualifiesStandaloneColumnThroughTableName()
 
     AnalyzeQueries False
 
+    AssertCellValue wsSql.Cells(2, COL_RESULT), _
+        "SELECT " & nameText & ", age FROM users tb1 LEFT JOIN location tb2 ON tb1.id = tb2.id"
     AssertCellValue wsSql.Cells(2, COL_REPLACEMENT), "tb1." & nameText
     AssertCellValue wsOutput.Cells(3, 17), "tb1." & nameText
     AssertCellValue wsOutput.Cells(4, 17), "tb1.age"

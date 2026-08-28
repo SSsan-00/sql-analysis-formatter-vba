@@ -32,6 +32,19 @@ public sealed record OutputReplacementQualification(
     string QualifiedValue);
 
 /// <summary>
+/// SQL解析シートのB列へ返す変換後クエリの論理行
+/// </summary>
+public sealed record OutputTransformedQueryLine(int QueryLine, string Value);
+
+/// <summary>
+/// SQL解析シートのC列以降へ返す最終変換値
+/// </summary>
+public sealed record OutputReplacementValue(
+    int QueryLine,
+    int Order,
+    string Value);
+
+/// <summary>
 /// アウトプットシート全体の描画計画
 /// </summary>
 public sealed record OutputSheetPlan(
@@ -46,9 +59,17 @@ public sealed record OutputSheetPlan(
     IReadOnlyList<string>? InputTableIds = null,
     IReadOnlyList<string>? OutputTableIds = null,
     int? FallbackSourceStartLine = null,
-    int? FallbackSourceEndLine = null)
+    int? FallbackSourceEndLine = null,
+    IReadOnlyList<OutputTransformedQueryLine>? TransformedQueryLines = null,
+    IReadOnlyList<OutputReplacementValue>? ReplacementValues = null)
 {
     public IReadOnlyList<string> InputTableIds { get; init; } = InputTableIds ?? [];
 
     public IReadOnlyList<string> OutputTableIds { get; init; } = OutputTableIds ?? [];
+
+    public IReadOnlyList<OutputTransformedQueryLine> TransformedQueryLines { get; init; } =
+        TransformedQueryLines ?? [];
+
+    public IReadOnlyList<OutputReplacementValue> ReplacementValues { get; init; } =
+        ReplacementValues ?? [];
 }

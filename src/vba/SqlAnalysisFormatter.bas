@@ -79,8 +79,11 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     Dim replacementValuesByRow As Object
     Dim queryLineRows As Collection
     Dim qualifications As Collection
+    Dim transformedQueryLines As Collection
+    Dim finalReplacementValues As Collection
     Dim inputTableIds As Collection
     Dim outputTableIds As Collection
+    Dim hasTransformedQueryData As Boolean
     Dim tableMaster As Object
     Dim duplicateTableIds As Collection
     Dim sqlValues As Variant
@@ -197,12 +200,20 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     If Len(convertedQueryText) > 0 Then
         If Not TryWriteExternalOutputPlan( _
             wsOutput, wsRef, parserQueryText, qualifications, inputTableIds, outputTableIds, _
-            fallbackReason, fallbackStartLine, fallbackEndLine) Then
+            fallbackReason, fallbackStartLine, fallbackEndLine, queryLineRows.Count, _
+            transformedQueryLines, finalReplacementValues, hasTransformedQueryData) Then
             ClearOutputTwoSheet wsOutputTwo
             WriteFallbackOutput wsOutput, convertedQueryText, fallbackReason
         Else
-            ApplyReplacementQualifications _
-                replacementValuesByRow, queryLineRows, qualifications
+            If hasTransformedQueryData Then
+                ApplyTransformedQueryLines _
+                    wsSql, lastRow, queryLineRows, transformedQueryLines
+                ApplyFinalReplacementValues _
+                    replacementValuesByRow, queryLineRows, finalReplacementValues
+            Else
+                ApplyReplacementQualifications _
+                    replacementValuesByRow, queryLineRows, qualifications
+            End If
             RenderOutputTwo wsOutputTwo, inputTableIds, outputTableIds, tableMaster
             ApplyOutputTwoNamesToMissingReferences _
                 wsOutput, inputTableIds, outputTableIds, tableMaster
@@ -1220,7 +1231,11 @@ Private Function TryWriteExternalOutputPlan( _
     ByRef outputTableIds As Collection, _
     ByRef fallbackReason As String, _
     ByRef fallbackStartLine As Long, _
-    ByRef fallbackEndLine As Long) As Boolean
+    ByRef fallbackEndLine As Long, _
+    ByVal expectedQueryLineCount As Long, _
+    ByRef transformedQueryLines As Collection, _
+    ByRef finalReplacementValues As Collection, _
+    ByRef hasTransformedQueryData As Boolean) As Boolean
 
     Dim parserPath As String
     Dim inputPath As String
@@ -1235,8 +1250,11 @@ Private Function TryWriteExternalOutputPlan( _
     fallbackStartLine = 0
     fallbackEndLine = 0
     Set qualifications = New Collection
+    Set transformedQueryLines = New Collection
+    Set finalReplacementValues = New Collection
     Set inputTableIds = New Collection
     Set outputTableIds = New Collection
+    hasTransformedQueryData = False
 
     parserPath = ResolveParserExePath()
     If Len(parserPath) = 0 Then
@@ -1263,7 +1281,8 @@ Private Function TryWriteExternalOutputPlan( _
     outputText = ReadUnicodeTextFile(outputPath)
     succeeded = ApplyOutputPlan( _
         wsOutput, outputText, qualifications, inputTableIds, outputTableIds, _
-        fallbackReason, fallbackStartLine, fallbackEndLine)
+        fallbackReason, fallbackStartLine, fallbackEndLine, expectedQueryLineCount, _
+        transformedQueryLines, finalReplacementValues, hasTransformedQueryData)
     If Not succeeded Then
         fallbackReason = ParserOutputInvalidReason()
     End If
@@ -1348,23 +1367,34 @@ Private Function ApplyOutputPlan( _
     ByRef outputTableIds As Collection, _
     ByRef fallbackReason As String, _
     ByRef fallbackStartLine As Long, _
-    ByRef fallbackEndLine As Long) As Boolean
+    ByRef fallbackEndLine As Long, _
+    ByVal expectedQueryLineCount As Long, _
+    ByRef transformedQueryLines As Collection, _
+    ByRef finalReplacementValues As Collection, _
+    ByRef hasTransformedQueryData As Boolean) As Boolean
     Dim lines As Variant
     Dim fields As Variant
     Dim cellValues As Variant
     Dim section As Variant
     Dim sections As Collection
     Dim parsedQualifications As Collection
+    Dim parsedTransformedQueryLines As Collection
+    Dim parsedFinalReplacementValues As Collection
     Dim parsedInputTableIds As Collection
     Dim parsedOutputTableIds As Collection
     Dim usedOutputColumns As Object
+    Dim transformedQueryLineSeen As Object
+    Dim finalReplacementValueSeen As Object
     Dim usedColumn As Variant
     Dim lineText As String
     Dim normalizedText As String
     Dim cellValue As String
     Dim originalValue As String
     Dim qualifiedValue As String
+    Dim transformedValue As String
+    Dim finalReplacementValue As String
     Dim tableId As String
+    Dim recordKey As String
     Dim parsedFallbackReason As String
     Dim lineIndex As Long
     Dim planVersion As Long
@@ -1374,6 +1404,10 @@ Private Function ApplyOutputPlan( _
     Dim columnNumber As Long
     Dim queryLine As Long
     Dim qualificationOrder As Long
+    Dim replacementOrder As Long
+    Dim previousReplacementQueryLine As Long
+    Dim previousReplacementOrder As Long
+    Dim replacementValueSeen As Boolean
     Dim startRow As Long
     Dim endRow As Long
     Dim parsedFallbackStartLine As Long
@@ -1391,19 +1425,24 @@ Private Function ApplyOutputPlan( _
     If CStr(fields(0)) <> "SAF_OUTPUT_PLAN" Then Exit Function
     If Not IsNumeric(fields(1)) Then Exit Function
     planVersion = CLng(fields(1))
-    If planVersion < 1 Or planVersion > 4 Then Exit Function
+    If planVersion < 1 Or planVersion > 5 Then Exit Function
     If Not IsNumeric(fields(2)) Then Exit Function
     rowCount = CLng(fields(2))
     If rowCount < 0 Then Exit Function
     If Not IsNumeric(fields(3)) Then Exit Function
     fallbackFlag = CLng(fields(3))
     If fallbackFlag <> 0 And fallbackFlag <> 1 Then Exit Function
+    If expectedQueryLineCount < 0 Then Exit Function
 
     Set sections = New Collection
     Set parsedQualifications = New Collection
+    Set parsedTransformedQueryLines = New Collection
+    Set parsedFinalReplacementValues = New Collection
     Set parsedInputTableIds = New Collection
     Set parsedOutputTableIds = New Collection
     Set usedOutputColumns = CreateTextDictionary()
+    Set transformedQueryLineSeen = CreateTextDictionary()
+    Set finalReplacementValueSeen = CreateTextDictionary()
     If rowCount > 0 Then
         ReDim cellValues(1 To rowCount, 1 To OUTPUT_LAST_COLUMN)
     End If
@@ -1446,6 +1485,38 @@ Private Function ApplyOutputPlan( _
                     If Len(originalValue) = 0 Or Len(qualifiedValue) = 0 Then GoTo InvalidPlan
                     parsedQualifications.Add Array( _
                         queryLine, qualificationOrder, originalValue, qualifiedValue)
+                Case "R"
+                    If planVersion < 5 Or UBound(fields) <> 2 Then GoTo InvalidPlan
+                    If Not IsNumeric(fields(1)) Then GoTo InvalidPlan
+                    queryLine = CLng(fields(1))
+                    If queryLine < 1 Or queryLine > expectedQueryLineCount Then GoTo InvalidPlan
+                    recordKey = CStr(queryLine)
+                    If transformedQueryLineSeen.Exists(recordKey) Then GoTo InvalidPlan
+                    transformedValue = UnescapeProtocolField(CStr(fields(2)))
+                    transformedQueryLineSeen.Add recordKey, True
+                    parsedTransformedQueryLines.Add Array(queryLine, transformedValue)
+                Case "V"
+                    If planVersion < 5 Or UBound(fields) <> 3 Then GoTo InvalidPlan
+                    If Not IsNumeric(fields(1)) Or Not IsNumeric(fields(2)) Then GoTo InvalidPlan
+                    queryLine = CLng(fields(1))
+                    replacementOrder = CLng(fields(2))
+                    If queryLine < 1 Or queryLine > expectedQueryLineCount Or _
+                        replacementOrder < 1 Then GoTo InvalidPlan
+                    recordKey = CStr(queryLine) & vbTab & CStr(replacementOrder)
+                    If finalReplacementValueSeen.Exists(recordKey) Then GoTo InvalidPlan
+                    If replacementValueSeen Then
+                        If queryLine < previousReplacementQueryLine Or _
+                            (queryLine = previousReplacementQueryLine And _
+                                replacementOrder <= previousReplacementOrder) Then GoTo InvalidPlan
+                    End If
+                    finalReplacementValue = UnescapeProtocolField(CStr(fields(3)))
+                    If Len(finalReplacementValue) = 0 Then GoTo InvalidPlan
+                    finalReplacementValueSeen.Add recordKey, True
+                    parsedFinalReplacementValues.Add Array( _
+                        queryLine, replacementOrder, finalReplacementValue)
+                    previousReplacementQueryLine = queryLine
+                    previousReplacementOrder = replacementOrder
+                    replacementValueSeen = True
                 Case "F"
                     If planVersion < 4 Or UBound(fields) <> 3 Then GoTo InvalidPlan
                     If fallbackFlag <> 1 Or fallbackDiagnosticSeen Then GoTo InvalidPlan
@@ -1475,6 +1546,12 @@ Private Function ApplyOutputPlan( _
         End If
     Next lineIndex
     If planVersion >= 4 And fallbackFlag = 1 And Not fallbackDiagnosticSeen Then GoTo InvalidPlan
+    If planVersion >= 5 Then
+        If parsedTransformedQueryLines.Count <> expectedQueryLineCount Then GoTo InvalidPlan
+        For queryLine = 1 To expectedQueryLineCount
+            If Not transformedQueryLineSeen.Exists(CStr(queryLine)) Then GoTo InvalidPlan
+        Next queryLine
+    End If
 
     If rowCount > 0 Then
         Set outputRange = ws.Range(ws.Cells(1, 1), ws.Cells(rowCount, OUTPUT_LAST_COLUMN))
@@ -1495,8 +1572,11 @@ Private Function ApplyOutputPlan( _
     ApplyOutputSheetFont ws, rowCount
     ApplyOutputSheetView ws
     Set qualifications = parsedQualifications
+    Set transformedQueryLines = parsedTransformedQueryLines
+    Set finalReplacementValues = parsedFinalReplacementValues
     Set inputTableIds = parsedInputTableIds
     Set outputTableIds = parsedOutputTableIds
+    hasTransformedQueryData = (planVersion >= 5)
     fallbackReason = parsedFallbackReason
     fallbackStartLine = parsedFallbackStartLine
     fallbackEndLine = parsedFallbackEndLine
@@ -1947,6 +2027,87 @@ Public Function DuplicateTableWarningMessage(ByVal duplicateTableIds As Collecti
 
     DuplicateTableWarningMessage = messageText
 End Function
+
+' parserが返した全論理行をSQL解析シートの元の入力行単位へ再結合
+Private Sub ApplyTransformedQueryLines( _
+    ByVal wsSql As Worksheet, _
+    ByVal lastRow As Long, _
+    ByVal queryLineRows As Collection, _
+    ByVal transformedQueryLines As Collection)
+
+    Dim transformedByLine As Object
+    Dim transformedByRow As Object
+    Dim lineRecord As Variant
+    Dim transformedData() As Variant
+    Dim queryLine As Long
+    Dim rowNumber As Long
+    Dim rowKey As String
+
+    If lastRow < 2 Then Exit Sub
+
+    Set transformedByLine = CreateTextDictionary()
+    Set transformedByRow = CreateTextDictionary()
+    For Each lineRecord In transformedQueryLines
+        transformedByLine(CStr(CLng(lineRecord(0)))) = CStr(lineRecord(1))
+    Next lineRecord
+
+    For queryLine = 1 To queryLineRows.Count
+        rowNumber = CLng(queryLineRows.Item(queryLine))
+        rowKey = CStr(rowNumber)
+        If transformedByRow.Exists(rowKey) Then
+            transformedByRow(rowKey) = CStr(transformedByRow(rowKey)) & vbLf & _
+                CStr(transformedByLine(CStr(queryLine)))
+        Else
+            transformedByRow.Add rowKey, CStr(transformedByLine(CStr(queryLine)))
+        End If
+    Next queryLine
+
+    ReDim transformedData(1 To lastRow - 1, 1 To 1)
+    For rowNumber = 2 To lastRow
+        rowKey = CStr(rowNumber)
+        If transformedByRow.Exists(rowKey) Then
+            transformedData(rowNumber - 1, 1) = _
+                OutputTextValue(CStr(transformedByRow(rowKey)))
+        End If
+    Next rowNumber
+
+    With wsSql.Range(wsSql.Cells(2, COL_RESULT), wsSql.Cells(lastRow, COL_RESULT))
+        .NumberFormat = "@"
+        .Value = transformedData
+    End With
+End Sub
+
+' parserが返した変換値一式で行別のC列出力を置き換え
+Private Sub ApplyFinalReplacementValues( _
+    ByVal replacementValuesByRow As Object, _
+    ByVal queryLineRows As Collection, _
+    ByVal finalReplacementValues As Collection)
+
+    Dim rowDictionary As Object
+    Dim valueRecord As Variant
+    Dim rowKey As Variant
+    Dim queryLine As Long
+    Dim valueOrder As Long
+
+    ' v5のV行はC列へ出す最終値の完全な集合として扱う
+    For Each rowKey In replacementValuesByRow.Keys
+        Set rowDictionary = replacementValuesByRow(CStr(rowKey))
+        rowDictionary.RemoveAll
+    Next rowKey
+
+    For Each valueRecord In finalReplacementValues
+        queryLine = CLng(valueRecord(0))
+        rowKey = CStr(queryLineRows.Item(queryLine))
+        If replacementValuesByRow.Exists(CStr(rowKey)) Then
+            Set rowDictionary = replacementValuesByRow(CStr(rowKey))
+        Else
+            Set rowDictionary = CreateTextDictionary()
+            Set replacementValuesByRow(CStr(rowKey)) = rowDictionary
+        End If
+        valueOrder = valueOrder + 1
+        AddReplacementValue rowDictionary, CStr(valueRecord(2)), valueOrder
+    Next valueRecord
+End Sub
 
 ' parserが補完したプレフィックスを行別の変換内容へ反映
 Private Sub ApplyReplacementQualifications( _
@@ -2808,9 +2969,9 @@ Private Function SqlHeader() As String
     SqlHeader = "SQL" & W(&H30AF, &H30A8, &H30EA)
 End Function
 
-' 和名変換後クエリ見出しを取得
+' 変換後クエリ見出しを取得
 Private Function ResultHeader() As String
-    ResultHeader = W(&H548C, &H540D, &H5909, &H63DB, &H5F8C, &H30AF, &H30A8, &H30EA)
+    ResultHeader = W(&H5909, &H63DB, &H5F8C, &H30AF, &H30A8, &H30EA)
 End Function
 
 ' 変換内容見出しを取得

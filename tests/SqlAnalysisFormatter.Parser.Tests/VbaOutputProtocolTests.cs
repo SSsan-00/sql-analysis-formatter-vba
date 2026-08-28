@@ -27,7 +27,7 @@ public sealed class VbaOutputProtocolTests
 
         var text = VbaOutputProtocol.SerializePlan(plan);
 
-        StringAssert.StartsWith(text, "SAF_OUTPUT_PLAN\t4\t3\t1");
+        StringAssert.StartsWith(text, "SAF_OUTPUT_PLAN\t5\t3\t1");
         StringAssert.Contains(
             text,
             "F\t2\t2\tWHEREの近くに正しくない構文があります。");
@@ -56,16 +56,30 @@ public sealed class VbaOutputProtocolTests
                 new OutputReplacementQualification(2, 8, "名前", "tb1.名前")
             ],
             InputTableIds: ["users"],
-            OutputTableIds: ["#wkuser"]);
+            OutputTableIds: ["#wkuser"],
+            TransformedQueryLines:
+            [
+                new OutputTransformedQueryLine(3, "WHERE tb1.状態 = 1"),
+                new OutputTransformedQueryLine(2, "SELECT tb1.名前\\値\tAS 表示名")
+            ],
+            ReplacementValues:
+            [
+                new OutputReplacementValue(3, 4, "tb1.状態"),
+                new OutputReplacementValue(2, 8, "tb1.名前\\値\r\n表示名")
+            ]);
 
         var text = VbaOutputProtocol.SerializePlan(plan);
 
         var expected = string.Join(
             "\r\n",
-            "SAF_OUTPUT_PLAN\t4\t4\t0",
+            "SAF_OUTPUT_PLAN\t5\t4\t0",
             "C\t1\t1\t見出し",
             "C\t3\t17\tline1\\r\\nline2\\\\value\\tend",
             "Q\t2\t8\t名前\ttb1.名前",
+            "R\t2\tSELECT tb1.名前\\\\値\\tAS 表示名",
+            "R\t3\tWHERE tb1.状態 = 1",
+            "V\t2\t8\ttb1.名前\\\\値\\r\\n表示名",
+            "V\t3\t4\ttb1.状態",
             "T\tINPUT\tusers",
             "T\tOUTPUT\t#wkuser",
             "S\tREFERENCE\t2\t2",

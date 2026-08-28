@@ -26,27 +26,38 @@ public static class OutputSheetPlanBuilder
         ArgumentNullException.ThrowIfNull(sql);
         ArgumentNullException.ThrowIfNull(mappings);
 
-        var script = ParseScript(sql, out var errors);
-        if (errors.Count > 0 || script is null)
+        var sourceScript = ParseScript(sql, out var errors);
+        if (errors.Count > 0 || sourceScript is null)
         {
-            var fallback = CreateParseFallback(sql, errors);
+            var fallback = AttachTransformedQueryResults(
+                CreateParseFallback(sql, errors),
+                sql,
+                null,
+                mappings,
+                []);
             return ParserFieldIdentifierRestorer.Restore(fallback, mappings);
         }
 
-        var qualificationResult = QualifyUnqualifiedSelectColumns(sql, script, mappings);
+        var qualificationResult = QualifyUnqualifiedSelectColumns(sql, sourceScript, mappings);
         var qualifiedSql = qualificationResult.Sql;
+        var script = sourceScript;
         if (!string.Equals(qualifiedSql, sql, StringComparison.Ordinal))
         {
             script = ParseScript(qualifiedSql, out errors);
             if (errors.Count > 0 || script is null)
             {
-                var fallback = CreateParseFallback(qualifiedSql, errors);
+                var fallback = AttachTransformedQueryResults(
+                    CreateParseFallback(qualifiedSql, errors),
+                    sql,
+                    sourceScript,
+                    mappings,
+                    []);
                 return ParserFieldIdentifierRestorer.Restore(fallback, mappings);
             }
         }
 
-        var statementPlans = script.Batches
-            .SelectMany(batch => batch.Statements)
+        var statements = Statements(script);
+        var statementPlans = statements
             .Select(statement => (
                 Statement: statement,
                 Plan: BuildStatement(qualifiedSql, statement, mappings)))
@@ -58,13 +69,250 @@ public static class OutputSheetPlanBuilder
             statementPlans
                 .Where(result => !result.Plan.IsFallback)
                 .Select(result => result.Statement));
+
+        var supportedQualifiedStatements = statementPlans
+            .Where(result => !result.Plan.IsFallback)
+            .Select(result => result.Statement)
+            .ToArray();
+        var sourceStatements = Statements(sourceScript);
+        var supportedSourceStatements = sourceStatements.Count == statementPlans.Length
+            ? sourceStatements
+                .Where((_, index) => !statementPlans[index].Plan.IsFallback)
+                .ToArray()
+            : [];
+        var sourceAliasReplacements =
+            BinaryDisplayAliasReplacementCollector.Collect(supportedSourceStatements);
+        var qualifiedAliasReplacements =
+            BinaryDisplayAliasReplacementCollector.Collect(supportedQualifiedStatements);
+        var transformedSql = ApplyTextReplacements(
+            sql,
+            0,
+            sourceAliasReplacements);
         plan = plan with
         {
             ReplacementQualifications = qualificationResult.Replacements,
             InputTableIds = usage.InputTableIds,
-            OutputTableIds = usage.OutputTableIds
+            OutputTableIds = usage.OutputTableIds,
+            TransformedQueryLines = BuildTransformedQueryLines(transformedSql),
+            ReplacementValues = BuildReplacementValues(
+                qualifiedSql,
+                script,
+                mappings,
+                qualifiedAliasReplacements)
         };
         return ParserFieldIdentifierRestorer.Restore(plan, mappings);
+    }
+
+    /// <summary>
+    /// スクリプト内のステートメントをバッチ順に列挙
+    /// </summary>
+    private static IReadOnlyList<TSqlStatement> Statements(TSqlScript script)
+    {
+        return script.Batches
+            .SelectMany(batch => batch.Statements)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// フォールバック時にも従来の和名変換結果をB列とC列へ返却
+    /// </summary>
+    private static OutputSheetPlan AttachTransformedQueryResults(
+        OutputSheetPlan plan,
+        string sql,
+        TSqlScript? script,
+        IReadOnlyList<MappingDefinition> mappings,
+        IReadOnlyList<SqlTextReplacement> aliasReplacements)
+    {
+        return plan with
+        {
+            TransformedQueryLines = BuildTransformedQueryLines(sql),
+            ReplacementValues = BuildReplacementValues(
+                sql,
+                script,
+                mappings,
+                aliasReplacements)
+        };
+    }
+
+    /// <summary>
+    /// SQLの行数と空行を維持してB列返却用の論理行へ分割
+    /// </summary>
+    private static IReadOnlyList<OutputTransformedQueryLine> BuildTransformedQueryLines(
+        string sql)
+    {
+        return sql
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Split('\n')
+            .Select((value, index) => new OutputTransformedQueryLine(index + 1, value))
+            .ToArray();
+    }
+
+    /// <summary>
+    /// parser専用フィールドIDの各出現を、C列へ返す最終表示値へ変換
+    /// </summary>
+    private static IReadOnlyList<OutputReplacementValue> BuildReplacementValues(
+        string sql,
+        TSqlScript? script,
+        IReadOnlyList<MappingDefinition> mappings,
+        IReadOnlyList<SqlTextReplacement> aliasReplacements)
+    {
+        var mappingsByParserId = mappings
+            .Where(mapping => mapping.ParserFieldId.Length > 0)
+            .GroupBy(mapping => mapping.ParserFieldId, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Last(),
+                StringComparer.Ordinal);
+        if (mappingsByParserId.Count == 0)
+        {
+            return [];
+        }
+
+        var occurrences = mappingsByParserId
+            .SelectMany(item => FindTextOccurrences(sql, item.Key)
+                .Select(offset => new ParserFieldOccurrence(offset, item.Value)))
+            .OrderBy(item => item.Offset)
+            .ToArray();
+        if (occurrences.Length == 0)
+        {
+            return [];
+        }
+
+        var parserColumns = script is null
+            ? []
+            : ParserFieldColumnCollector.Collect(script, mappingsByParserId.Keys);
+        var replacementsByOffset = aliasReplacements
+            .GroupBy(item => item.Offset)
+            .ToDictionary(group => group.Key, group => group.Last());
+        var positions = SqlTextPositions(sql, occurrences.Select(item => item.Offset));
+        var values = new List<OutputReplacementValue>(occurrences.Length);
+        for (var index = 0; index < occurrences.Length; index++)
+        {
+            var occurrence = occurrences[index];
+            var column = parserColumns.FirstOrDefault(item =>
+                string.Equals(
+                    item.FieldIdentifier.Value,
+                    occurrence.Mapping.ParserFieldId,
+                    StringComparison.Ordinal) &&
+                occurrence.Offset >= item.FieldIdentifier.StartOffset &&
+                occurrence.Offset < item.FieldIdentifier.StartOffset +
+                    item.FieldIdentifier.FragmentLength);
+            var value = ReplacementValueFor(
+                sql,
+                occurrence.Mapping,
+                column,
+                replacementsByOffset);
+            values.Add(new OutputReplacementValue(
+                positions[index].Line,
+                positions[index].Column,
+                value));
+        }
+
+        return values;
+    }
+
+    /// <summary>
+    /// 1件のparser専用IDを元定義、未修飾列補完、表示用別名から最終値へ変換
+    /// </summary>
+    private static string ReplacementValueFor(
+        string sql,
+        MappingDefinition mapping,
+        ParserFieldColumn? parserColumn,
+        IReadOnlyDictionary<int, SqlTextReplacement> aliasReplacements)
+    {
+        var value = mapping.TableId == "-"
+            ? mapping.ParserFieldId
+            : mapping.TableId + "." + mapping.ParserFieldId;
+        var identifiers = parserColumn?.Column.MultiPartIdentifier?.Identifiers;
+        if (identifiers is null || identifiers.Count < 2)
+        {
+            return value;
+        }
+
+        var qualifier = identifiers[^2];
+        if (aliasReplacements.TryGetValue(qualifier.StartOffset, out var aliasReplacement))
+        {
+            return aliasReplacement.Value + "." + mapping.ParserFieldId;
+        }
+
+        if (mapping.TableId == "-")
+        {
+            return RawIdentifierText(sql, qualifier) + "." + mapping.ParserFieldId;
+        }
+
+        return value;
+    }
+
+    /// <summary>
+    /// 識別子の引用符を含む元表記を取得
+    /// </summary>
+    private static string RawIdentifierText(string sql, Identifier identifier)
+    {
+        return identifier.StartOffset >= 0 &&
+            identifier.FragmentLength > 0 &&
+            identifier.StartOffset + identifier.FragmentLength <= sql.Length
+                ? sql.Substring(identifier.StartOffset, identifier.FragmentLength)
+                : identifier.Value;
+    }
+
+    /// <summary>
+    /// SQL内にある指定文字列の全開始位置を列挙
+    /// </summary>
+    private static IEnumerable<int> FindTextOccurrences(string sql, string value)
+    {
+        var offset = 0;
+        while (offset <= sql.Length - value.Length)
+        {
+            offset = sql.IndexOf(value, offset, StringComparison.Ordinal);
+            if (offset < 0)
+            {
+                yield break;
+            }
+
+            yield return offset;
+            offset += value.Length;
+        }
+    }
+
+    /// <summary>
+    /// 昇順の文字位置を1始まりの論理行・列へ変換
+    /// </summary>
+    private static IReadOnlyList<SqlTextPosition> SqlTextPositions(
+        string sql,
+        IEnumerable<int> offsets)
+    {
+        var positions = new List<SqlTextPosition>();
+        var currentOffset = 0;
+        var line = 1;
+        var column = 1;
+        foreach (var targetOffset in offsets)
+        {
+            while (currentOffset < targetOffset)
+            {
+                if (sql[currentOffset] == '\r')
+                {
+                    if (currentOffset + 1 < sql.Length && sql[currentOffset + 1] == '\n')
+                    {
+                        currentOffset++;
+                    }
+                    line++;
+                    column = 1;
+                }
+                else if (sql[currentOffset] == '\n')
+                {
+                    line++;
+                    column = 1;
+                }
+                else
+                {
+                    column++;
+                }
+                currentOffset++;
+            }
+            positions.Add(new SqlTextPosition(line, column));
+        }
+        return positions;
     }
 
     /// <summary>
@@ -4487,6 +4735,40 @@ public static class OutputSheetPlanBuilder
     }
 
     /// <summary>
+    /// parser専用フィールドIDを末尾識別子に持つ列参照を収集
+    /// </summary>
+    private sealed class ParserFieldColumnCollector : TSqlFragmentVisitor
+    {
+        private readonly ISet<string> parserFieldIds;
+        private readonly List<ParserFieldColumn> columns = [];
+
+        private ParserFieldColumnCollector(IEnumerable<string> parserFieldIds)
+        {
+            this.parserFieldIds = parserFieldIds.ToHashSet(StringComparer.Ordinal);
+        }
+
+        public static IReadOnlyList<ParserFieldColumn> Collect(
+            TSqlFragment fragment,
+            IEnumerable<string> parserFieldIds)
+        {
+            var collector = new ParserFieldColumnCollector(parserFieldIds);
+            fragment.Accept(collector);
+            return collector.columns;
+        }
+
+        public override void ExplicitVisit(ColumnReferenceExpression node)
+        {
+            var identifiers = node.MultiPartIdentifier?.Identifiers;
+            if (identifiers is { Count: > 0 } &&
+                parserFieldIds.Contains(identifiers[^1].Value))
+            {
+                columns.Add(new ParserFieldColumn(node, identifiers[^1]));
+            }
+            base.ExplicitVisit(node);
+        }
+    }
+
+    /// <summary>
     /// 式内の列参照を出現順に収集し、サブクエリ内部は別フレームへ委ねる
     /// </summary>
     private sealed class ColumnReferenceCollector : TSqlFragmentVisitor
@@ -4684,6 +4966,7 @@ public static class OutputSheetPlanBuilder
                 var tableBindings = new Dictionary<int, DisplayAliasBinding>();
                 var renamedAliases = new Dictionary<string, string>(
                     StringComparer.OrdinalIgnoreCase);
+                var declarationReplacements = new List<SqlTextReplacement>();
                 var namedTables = branch.FromClause?.TableReferences
                     .SelectMany(EnumerateNamedTables)
                     .ToArray() ?? [];
@@ -4731,13 +5014,20 @@ public static class OutputSheetPlanBuilder
                     {
                         renamedAliases[sourceAlias] = displayAlias;
                         collidingAliases.Add(sourceAlias);
+                        declarationReplacements.Add(new SqlTextReplacement(
+                            table.Alias.StartOffset,
+                            table.Alias.FragmentLength,
+                            DisplayAliasReferenceCollector.DisplayIdentifier(
+                                displayAlias,
+                                table.Alias.QuoteType)));
                     }
                 }
 
                 assignments.Add(new BranchAliasAssignment(
                     branch,
                     tableBindings,
-                    renamedAliases));
+                    renamedAliases,
+                    declarationReplacements));
             }
 
             var branchAliases = assignments
@@ -4751,12 +5041,24 @@ public static class OutputSheetPlanBuilder
                                 PreservePhysicalTableId = collidingAliases.Contains(
                                     item.Value.SourceAlias)
                             }),
-                        DisplayAliasReferenceCollector.Collect(
-                            assignment.Query,
-                            assignment.RenamedAliases))))
+                        assignment.DeclarationReplacements
+                            .Concat(DisplayAliasReferenceCollector.Collect(
+                                assignment.Query,
+                                assignment.RenamedAliases))
+                            .GroupBy(item => item.Offset)
+                            .Select(group => group.Last())
+                            .OrderBy(item => item.Offset)
+                            .ToArray())))
                 .ToArray();
             return new BinaryDisplayAliasPlan(branchAliases);
         }
+
+        public IReadOnlyList<SqlTextReplacement> Replacements => branches
+            .SelectMany(branch => branch.Aliases.Replacements)
+            .GroupBy(item => item.Offset)
+            .Select(group => group.Last())
+            .OrderBy(item => item.Offset)
+            .ToArray();
 
         public DisplayAliasContext? ContextFor(QuerySpecification query)
         {
@@ -4791,6 +5093,56 @@ public static class OutputSheetPlanBuilder
             return string.Join(
                 ".",
                 table.SchemaObject.Identifiers.Select(identifier => identifier.Value));
+        }
+    }
+
+    /// <summary>
+    /// 対応済みステートメント内の複合クエリからSQL全体用の別名置換を収集
+    /// </summary>
+    private sealed class BinaryDisplayAliasReplacementCollector : TSqlFragmentVisitor
+    {
+        private readonly HashSet<(int Offset, int Length)> visited = [];
+        private readonly List<SqlTextReplacement> replacements = [];
+
+        public static IReadOnlyList<SqlTextReplacement> Collect(
+            IEnumerable<TSqlStatement> statements)
+        {
+            var collector = new BinaryDisplayAliasReplacementCollector();
+            foreach (var statement in statements)
+            {
+                statement.Accept(collector);
+            }
+
+            return collector.replacements
+                .GroupBy(item => item.Offset)
+                .Select(group => group.Last())
+                .OrderBy(item => item.Offset)
+                .ToArray();
+        }
+
+        public override void ExplicitVisit(BinaryQueryExpression node)
+        {
+            if (!visited.Add((node.StartOffset, node.FragmentLength)))
+            {
+                return;
+            }
+
+            var branches = new List<QuerySpecification>();
+            var separators = new List<string>();
+            AddBinaryBranches(node, branches, separators);
+            if (branches.Count == 0)
+            {
+                return;
+            }
+
+            replacements.AddRange(BinaryDisplayAliasPlan.Create(branches).Replacements);
+
+            // 同じ集合演算ツリーは一度だけ割り当て、分岐内の独立した集合演算だけを探索する。
+            foreach (var branch in branches)
+            {
+                branch.Accept(this);
+            }
+            node.OrderByClause?.Accept(this);
         }
     }
 
@@ -4989,7 +5341,7 @@ public static class OutputSheetPlanBuilder
             }
         }
 
-        private static string DisplayIdentifier(string value, QuoteType quoteType)
+        public static string DisplayIdentifier(string value, QuoteType quoteType)
         {
             return quoteType switch
             {
@@ -5063,7 +5415,8 @@ public static class OutputSheetPlanBuilder
     private sealed record BranchAliasAssignment(
         QuerySpecification Query,
         IReadOnlyDictionary<int, DisplayAliasBinding> TableBindings,
-        IReadOnlyDictionary<string, string> RenamedAliases);
+        IReadOnlyDictionary<string, string> RenamedAliases,
+        IReadOnlyList<SqlTextReplacement> DeclarationReplacements);
 
     private sealed record DisplayAliasBinding(
         string SourceAlias,
@@ -5074,6 +5427,16 @@ public static class OutputSheetPlanBuilder
     private sealed record BranchDisplayAliases(
         QuerySpecification Query,
         DisplayAliasContext Aliases);
+
+    private sealed record ParserFieldOccurrence(
+        int Offset,
+        MappingDefinition Mapping);
+
+    private sealed record ParserFieldColumn(
+        ColumnReferenceExpression Column,
+        Identifier FieldIdentifier);
+
+    private sealed record SqlTextPosition(int Line, int Column);
 
     private sealed class UnsupportedOutputException(
         string message,

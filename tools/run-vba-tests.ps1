@@ -129,6 +129,7 @@ try {
         'AnalyzeQueries_ClassifiesModificationTargetsByRole',
         'AnalyzeQueries_UsesOutputTwoNameForExactMissingReference',
         'AnalyzeQueries_RenamesDuplicateUnionAliases',
+        'AnalyzeQueries_PreservesBothUnionAliasesInOneSqlRow',
         'AnalyzeQueries_RendersSupportedTablesDuringPartialFallback',
         'AnalyzeQueries_SortsOutputTwoByCompositeTableNumber',
         'AnalyzeQueries_LeavesOutputTwoHeaderOnlyOnFallback',

@@ -44,11 +44,19 @@ internal static class ParserFieldIdentifierRestorer
                 QualifiedValue = RestoreText(qualification.QualifiedValue, replacements)
             })
             .ToArray();
+        var transformedQueryLines = plan.TransformedQueryLines
+            .Select(line => line with { Value = RestoreText(line.Value, replacements) })
+            .ToArray();
+        var replacementValues = plan.ReplacementValues
+            .Select(item => item with { Value = RestoreText(item.Value, replacements) })
+            .ToArray();
         return plan with
         {
             Cells = cells,
             FallbackReason = fallbackReason,
-            ReplacementQualifications = replacementQualifications
+            ReplacementQualifications = replacementQualifications,
+            TransformedQueryLines = transformedQueryLines,
+            ReplacementValues = replacementValues
         };
     }
 

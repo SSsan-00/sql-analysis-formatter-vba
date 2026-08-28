@@ -417,6 +417,12 @@ public sealed class OutputSheetPlanBuilderTests
             .Single(item => item.OriginalValue == "名前");
         Assert.AreEqual(1, qualification.QueryLine);
         Assert.AreEqual("tb1.名前", qualification.QualifiedValue);
+        Assert.AreEqual(
+            "SELECT 名前, age\nFROM users AS tb1\nLEFT JOIN location AS tb2 ON tb1.id = tb2.id",
+            string.Join('\n', plan.TransformedQueryLines.Select(line => line.Value)));
+        CollectionAssert.AreEqual(
+            new[] { new OutputReplacementValue(1, 12, "tb1.名前") },
+            plan.ReplacementValues.ToArray());
     }
 
     /// <summary>
@@ -2074,6 +2080,186 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
+    /// SQL解析B列ではUNION分岐の別名宣言と束縛済み参照を同じ表示別名へ変更
+    /// </summary>
+    [TestMethod]
+    public void Build_ReturnsTransformedUnionSqlAndFinalReplacementValues()
+    {
+        const string parserFieldId = "__SAF_FIELD_R000002__";
+        const string sql = """
+            SELECT tb1.__SAF_FIELD_R000002__ FROM city1 AS tb1
+            UNION
+            SELECT tb1.__SAF_FIELD_R000002__ FROM city2 AS tb1;
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "都市1", "name", "都市名", parserFieldId),
+            new("city2", "都市2", "unused", "未使用")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(
+            "SELECT tb1.都市名 FROM city1 AS tb1\n" +
+            "UNION\n" +
+            "SELECT tb2.都市名 FROM city2 AS tb2;",
+            string.Join('\n', plan.TransformedQueryLines.Select(line => line.Value)));
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                new OutputReplacementValue(1, 12, "tb1.都市名"),
+                new OutputReplacementValue(3, 12, "tb2.都市名")
+            },
+            plan.ReplacementValues.ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "city1", "city2" },
+            plan.InputTableIds.ToArray());
+    }
+
+    /// <summary>
+    /// UNION両分岐が同じ論理行でもC列用の元別名と採番後別名を両方返す
+    /// </summary>
+    [TestMethod]
+    public void Build_KeepsBothUnionReplacementValuesOnOneLine()
+    {
+        const string parserFieldId = "__SAF_FIELD_R000002__";
+        const string sql = "SELECT tb1.__SAF_FIELD_R000002__ FROM city1 tb1 " +
+            "UNION SELECT tb1.__SAF_FIELD_R000002__ FROM city2 tb1";
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "都市1", "name", "都市名", parserFieldId),
+            new("city2", "都市2", "unused", "未使用")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.AreEqual(
+            "SELECT tb1.都市名 FROM city1 tb1 UNION " +
+            "SELECT tb2.都市名 FROM city2 tb2",
+            plan.TransformedQueryLines.Single().Value);
+        CollectionAssert.AreEqual(
+            new[] { "tb1.都市名", "tb2.都市名" },
+            plan.ReplacementValues.Select(value => value.Value).ToArray());
+        Assert.IsTrue(plan.ReplacementValues.All(value => value.QueryLine == 1));
+    }
+
+    /// <summary>
+    /// 別名の文字列・コメントと内側で再定義した同名別名はB列でも変更しない
+    /// </summary>
+    [TestMethod]
+    public void Build_TransformsOnlyBoundUnionAliasesInReturnedSql()
+    {
+        const string parserFieldId = "__SAF_FIELD_R000002__";
+        const string sql = """
+            SELECT tb1.__SAF_FIELD_R000002__ FROM city1 AS tb1
+            UNION ALL
+            SELECT tb1.__SAF_FIELD_R000002__ FROM city2 AS tb1
+            WHERE tb1.note = 'tb1.__SAF_FIELD_R000002__'
+              AND EXISTS (
+                SELECT 1 FROM audit AS tb1
+                WHERE tb1.__SAF_FIELD_R000002__ = 1
+              ) -- tb1.__SAF_FIELD_R000002__
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "都市1", "name", "都市名", parserFieldId),
+            new("city2", "都市2", "unused", "未使用")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+        var transformedSql = string.Join(
+            '\n',
+            plan.TransformedQueryLines.Select(line => line.Value));
+
+        StringAssert.Contains(transformedSql, "SELECT tb2.都市名 FROM city2 AS tb2");
+        StringAssert.Contains(transformedSql, "WHERE tb2.note = 'tb1.都市名'");
+        StringAssert.Contains(transformedSql, "SELECT 1 FROM audit AS tb1");
+        StringAssert.Contains(transformedSql, "WHERE tb1.都市名 = 1");
+        StringAssert.Contains(transformedSql, "-- tb1.都市名");
+        CollectionAssert.Contains(
+            plan.ReplacementValues.Select(value => value.Value).ToArray(),
+            "tb2.都市名");
+        Assert.AreEqual(
+            4,
+            plan.ReplacementValues.Count(value => value.Value == "tb1.都市名"));
+    }
+
+    /// <summary>
+    /// 同じ物理表を指す別名と引用別名は不要な採番をせず、必要な引用形式だけ維持
+    /// </summary>
+    [TestMethod]
+    public void Build_ReturnedSqlPreservesQuotedAliasStyleAndSamePhysicalNoOp()
+    {
+        const string renamedSql = "SELECT [tb1].id FROM city1 AS [tb1] " +
+            "UNION SELECT [tb1].id FROM city2 AS [tb1]";
+        const string samePhysicalSql = "SELECT tb1.id FROM city1 tb1 " +
+            "UNION SELECT tb1.id FROM city1 tb1";
+
+        var renamedPlan = OutputSheetPlanBuilder.Build(renamedSql, []);
+        var samePhysicalPlan = OutputSheetPlanBuilder.Build(samePhysicalSql, []);
+
+        Assert.AreEqual(
+            "SELECT [tb1].id FROM city1 AS [tb1] " +
+            "UNION SELECT [tb2].id FROM city2 AS [tb2]",
+            renamedPlan.TransformedQueryLines.Single().Value);
+        Assert.AreEqual(
+            samePhysicalSql,
+            samePhysicalPlan.TransformedQueryLines.Single().Value);
+    }
+
+    /// <summary>
+    /// 複数ステートメントでは対応済みSELECTだけB列の表示別名を変更
+    /// </summary>
+    [TestMethod]
+    public void Build_TransformsAliasesOnlyInsideSupportedStatements()
+    {
+        const string sql = """
+            CREATE INDEX IX_ignored_id ON dbo.ignored_table(id);
+            SELECT tb1.id FROM city1 AS tb1
+            UNION
+            SELECT tb1.id FROM city2 AS tb1;
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsTrue(plan.IsFallback);
+        Assert.AreEqual(
+            "CREATE INDEX IX_ignored_id ON dbo.ignored_table(id);\n" +
+            "SELECT tb1.id FROM city1 AS tb1\n" +
+            "UNION\n" +
+            "SELECT tb2.id FROM city2 AS tb2;",
+            string.Join('\n', plan.TransformedQueryLines.Select(line => line.Value)));
+        CollectionAssert.AreEqual(
+            new[] { "city1", "city2" },
+            plan.InputTableIds.ToArray());
+    }
+
+    /// <summary>
+    /// 構文エラーで束縛を判断できない場合は従来の和名変換だけをB/C列へ返す
+    /// </summary>
+    [TestMethod]
+    public void Build_ParseFallbackDoesNotGuessDisplayAliases()
+    {
+        const string parserFieldId = "__SAF_FIELD_R000002__";
+        const string sql = "SELECT tb1.__SAF_FIELD_R000002__ FROM city1 tb1 " +
+            "UNION SELECT tb1.__SAF_FIELD_R000002__ FROM city2 tb1 WHERE;";
+        MappingDefinition[] mappings =
+        [new("tb1", "都市", "name", "都市名", parserFieldId)];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsTrue(plan.IsFallback);
+        Assert.AreEqual(
+            "SELECT tb1.都市名 FROM city1 tb1 " +
+            "UNION SELECT tb1.都市名 FROM city2 tb1 WHERE;",
+            plan.TransformedQueryLines.Single().Value);
+        CollectionAssert.AreEqual(
+            new[] { "tb1.都市名", "tb1.都市名" },
+            plan.ReplacementValues.Select(value => value.Value).ToArray());
+    }
+
+    /// <summary>
     /// INTERSECTとEXCEPTでも分岐をまたぐ別名衝突を同じ規則で解消
     /// </summary>
     [TestMethod]
@@ -2183,6 +2369,9 @@ public sealed class OutputSheetPlanBuilderTests
 
         StringAssert.Contains(CellValue(plan, 2, 1), "(和名未取得)[city2][tb10]");
         Assert.AreEqual("tb10.id", CellValue(plan, 5, 17));
+        StringAssert.Contains(
+            string.Join('\n', plan.TransformedQueryLines.Select(line => line.Value)),
+            "FROM city2 AS tb10");
     }
 
     /// <summary>
