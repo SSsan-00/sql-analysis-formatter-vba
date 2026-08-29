@@ -81,9 +81,11 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     Dim qualifications As Collection
     Dim transformedQueryLines As Collection
     Dim finalReplacementValues As Collection
+    Dim tableNameReferences As Collection
     Dim inputTableIds As Collection
     Dim outputTableIds As Collection
     Dim hasTransformedQueryData As Boolean
+    Dim hasTableNameReferenceData As Boolean
     Dim tableMaster As Object
     Dim duplicateTableIds As Collection
     Dim sqlValues As Variant
@@ -132,6 +134,7 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     Set replacementValuesByRow = CreateTextDictionary()
     Set queryLineRows = New Collection
     Set qualifications = New Collection
+    Set tableNameReferences = New Collection
     Set inputTableIds = New Collection
     Set outputTableIds = New Collection
     analysisStage = "load table definitions"
@@ -201,7 +204,8 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
         If Not TryWriteExternalOutputPlan( _
             wsOutput, wsRef, parserQueryText, qualifications, inputTableIds, outputTableIds, _
             fallbackReason, fallbackStartLine, fallbackEndLine, queryLineRows.Count, _
-            transformedQueryLines, finalReplacementValues, hasTransformedQueryData) Then
+            transformedQueryLines, finalReplacementValues, hasTransformedQueryData, _
+            tableNameReferences, hasTableNameReferenceData) Then
             ClearOutputTwoSheet wsOutputTwo
             WriteFallbackOutput wsOutput, convertedQueryText, fallbackReason
         Else
@@ -215,8 +219,9 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
                     replacementValuesByRow, queryLineRows, qualifications
             End If
             RenderOutputTwo wsOutputTwo, inputTableIds, outputTableIds, tableMaster
-            ApplyOutputTwoNamesToMissingReferences _
-                wsOutput, inputTableIds, outputTableIds, tableMaster
+            ApplyOutputTwoNamesToMissingTableDisplays _
+                wsOutput, inputTableIds, outputTableIds, tableMaster, _
+                tableNameReferences, hasTableNameReferenceData
         End If
     Else
         ClearOutputTwoSheet wsOutputTwo
@@ -1235,7 +1240,9 @@ Private Function TryWriteExternalOutputPlan( _
     ByVal expectedQueryLineCount As Long, _
     ByRef transformedQueryLines As Collection, _
     ByRef finalReplacementValues As Collection, _
-    ByRef hasTransformedQueryData As Boolean) As Boolean
+    ByRef hasTransformedQueryData As Boolean, _
+    ByRef tableNameReferences As Collection, _
+    ByRef hasTableNameReferenceData As Boolean) As Boolean
 
     Dim parserPath As String
     Dim inputPath As String
@@ -1252,9 +1259,11 @@ Private Function TryWriteExternalOutputPlan( _
     Set qualifications = New Collection
     Set transformedQueryLines = New Collection
     Set finalReplacementValues = New Collection
+    Set tableNameReferences = New Collection
     Set inputTableIds = New Collection
     Set outputTableIds = New Collection
     hasTransformedQueryData = False
+    hasTableNameReferenceData = False
 
     parserPath = ResolveParserExePath()
     If Len(parserPath) = 0 Then
@@ -1282,7 +1291,8 @@ Private Function TryWriteExternalOutputPlan( _
     succeeded = ApplyOutputPlan( _
         wsOutput, outputText, qualifications, inputTableIds, outputTableIds, _
         fallbackReason, fallbackStartLine, fallbackEndLine, expectedQueryLineCount, _
-        transformedQueryLines, finalReplacementValues, hasTransformedQueryData)
+        transformedQueryLines, finalReplacementValues, hasTransformedQueryData, _
+        tableNameReferences, hasTableNameReferenceData)
     If Not succeeded Then
         fallbackReason = ParserOutputInvalidReason()
     End If
@@ -1371,7 +1381,9 @@ Private Function ApplyOutputPlan( _
     ByVal expectedQueryLineCount As Long, _
     ByRef transformedQueryLines As Collection, _
     ByRef finalReplacementValues As Collection, _
-    ByRef hasTransformedQueryData As Boolean) As Boolean
+    ByRef hasTransformedQueryData As Boolean, _
+    ByRef tableNameReferences As Collection, _
+    ByRef hasTableNameReferenceData As Boolean) As Boolean
     Dim lines As Variant
     Dim fields As Variant
     Dim cellValues As Variant
@@ -1380,19 +1392,25 @@ Private Function ApplyOutputPlan( _
     Dim parsedQualifications As Collection
     Dim parsedTransformedQueryLines As Collection
     Dim parsedFinalReplacementValues As Collection
+    Dim parsedTableNameReferences As Collection
     Dim parsedInputTableIds As Collection
     Dim parsedOutputTableIds As Collection
     Dim usedOutputColumns As Object
     Dim transformedQueryLineSeen As Object
     Dim finalReplacementValueSeen As Object
+    Dim tableNameReferenceSeen As Object
     Dim usedColumn As Variant
     Dim lineText As String
     Dim normalizedText As String
     Dim cellValue As String
+    Dim cellText As String
     Dim originalValue As String
     Dim qualifiedValue As String
     Dim transformedValue As String
     Dim finalReplacementValue As String
+    Dim sourceValue As String
+    Dim physicalTableId As String
+    Dim replacementSuffix As String
     Dim tableId As String
     Dim recordKey As String
     Dim parsedFallbackReason As String
@@ -1413,6 +1431,7 @@ Private Function ApplyOutputPlan( _
     Dim parsedFallbackStartLine As Long
     Dim parsedFallbackEndLine As Long
     Dim fallbackDiagnosticSeen As Boolean
+    Dim tableNameReference As Variant
     Dim outputRange As Range
 
     On Error GoTo InvalidPlan
@@ -1425,7 +1444,7 @@ Private Function ApplyOutputPlan( _
     If CStr(fields(0)) <> "SAF_OUTPUT_PLAN" Then Exit Function
     If Not IsNumeric(fields(1)) Then Exit Function
     planVersion = CLng(fields(1))
-    If planVersion < 1 Or planVersion > 5 Then Exit Function
+    If planVersion < 1 Or planVersion > 6 Then Exit Function
     If Not IsNumeric(fields(2)) Then Exit Function
     rowCount = CLng(fields(2))
     If rowCount < 0 Then Exit Function
@@ -1438,11 +1457,13 @@ Private Function ApplyOutputPlan( _
     Set parsedQualifications = New Collection
     Set parsedTransformedQueryLines = New Collection
     Set parsedFinalReplacementValues = New Collection
+    Set parsedTableNameReferences = New Collection
     Set parsedInputTableIds = New Collection
     Set parsedOutputTableIds = New Collection
     Set usedOutputColumns = CreateTextDictionary()
     Set transformedQueryLineSeen = CreateTextDictionary()
     Set finalReplacementValueSeen = CreateTextDictionary()
+    Set tableNameReferenceSeen = CreateCaseInsensitiveTextDictionary()
     If rowCount > 0 Then
         ReDim cellValues(1 To rowCount, 1 To OUTPUT_LAST_COLUMN)
     End If
@@ -1517,6 +1538,31 @@ Private Function ApplyOutputPlan( _
                     previousReplacementQueryLine = queryLine
                     previousReplacementOrder = replacementOrder
                     replacementValueSeen = True
+                Case "N"
+                    If planVersion < 6 Or UBound(fields) <> 5 Then GoTo InvalidPlan
+                    If Not IsNumeric(fields(1)) Or Not IsNumeric(fields(2)) Then GoTo InvalidPlan
+                    rowNumber = CLng(fields(1))
+                    columnNumber = CLng(fields(2))
+                    If rowNumber < 1 Or rowNumber > rowCount Or _
+                        columnNumber < 1 Or columnNumber > OUTPUT_LAST_COLUMN Then GoTo InvalidPlan
+                    sourceValue = UnescapeProtocolField(CStr(fields(3)))
+                    physicalTableId = UnescapeProtocolField(CStr(fields(4)))
+                    replacementSuffix = UnescapeProtocolField(CStr(fields(5)))
+                    If Len(sourceValue) = 0 Or Len(physicalTableId) = 0 Then GoTo InvalidPlan
+                    If StrComp( _
+                        Left$(sourceValue, Len("(" & MissingNameText() & ")[")), _
+                        "(" & MissingNameText() & ")[", _
+                        vbBinaryCompare) <> 0 Then GoTo InvalidPlan
+                    If Len(replacementSuffix) > 0 Then
+                        If Left$(replacementSuffix, 1) <> "[" Or _
+                            Right$(replacementSuffix, 1) <> "]" Then GoTo InvalidPlan
+                    End If
+                    recordKey = CStr(rowNumber) & vbTab & CStr(columnNumber) & _
+                        vbTab & sourceValue
+                    If tableNameReferenceSeen.Exists(recordKey) Then GoTo InvalidPlan
+                    tableNameReferenceSeen.Add recordKey, True
+                    parsedTableNameReferences.Add Array( _
+                        rowNumber, columnNumber, sourceValue, physicalTableId, replacementSuffix)
                 Case "F"
                     If planVersion < 4 Or UBound(fields) <> 3 Then GoTo InvalidPlan
                     If fallbackFlag <> 1 Or fallbackDiagnosticSeen Then GoTo InvalidPlan
@@ -1552,6 +1598,16 @@ Private Function ApplyOutputPlan( _
             If Not transformedQueryLineSeen.Exists(CStr(queryLine)) Then GoTo InvalidPlan
         Next queryLine
     End If
+    If planVersion >= 6 Then
+        For Each tableNameReference In parsedTableNameReferences
+            rowNumber = CLng(tableNameReference(0))
+            columnNumber = CLng(tableNameReference(1))
+            sourceValue = CStr(tableNameReference(2))
+            cellText = CStr(cellValues(rowNumber, columnNumber))
+            If Not IsOutputTableNameReference( _
+                cellText, columnNumber, sourceValue) Then GoTo InvalidPlan
+        Next tableNameReference
+    End If
 
     If rowCount > 0 Then
         Set outputRange = ws.Range(ws.Cells(1, 1), ws.Cells(rowCount, OUTPUT_LAST_COLUMN))
@@ -1574,9 +1630,11 @@ Private Function ApplyOutputPlan( _
     Set qualifications = parsedQualifications
     Set transformedQueryLines = parsedTransformedQueryLines
     Set finalReplacementValues = parsedFinalReplacementValues
+    Set tableNameReferences = parsedTableNameReferences
     Set inputTableIds = parsedInputTableIds
     Set outputTableIds = parsedOutputTableIds
     hasTransformedQueryData = (planVersion >= 5)
+    hasTableNameReferenceData = (planVersion >= 6)
     fallbackReason = parsedFallbackReason
     fallbackStartLine = parsedFallbackStartLine
     fallbackEndLine = parsedFallbackEndLine
@@ -1623,20 +1681,21 @@ Private Sub RenderOutputTwo( _
     ApplyOutputTwoSheetLayout ws, False
 End Sub
 
-' アウトプット②へ表示する完全一致IDの名称で未取得の参照テーブルだけを補完
-Private Sub ApplyOutputTwoNamesToMissingReferences( _
+' アウトプット②へ表示する完全一致の物理IDで未取得のテーブル表示を補完
+Private Sub ApplyOutputTwoNamesToMissingTableDisplays( _
     ByVal wsOutput As Worksheet, _
     ByVal inputTableIds As Collection, _
     ByVal outputTableIds As Collection, _
-    ByVal tableMaster As Object)
+    ByVal tableMaster As Object, _
+    ByVal tableNameReferences As Collection, _
+    ByVal hasTableNameReferenceData As Boolean)
 
     Dim matchedNames As Object
     Dim referenceValues As Variant
-    Dim tableId As Variant
+    Dim joinHeadingValues As Variant
     Dim rowNumber As Long
     Dim lastRow As Long
     Dim referencePrefix As String
-    Dim missingToken As String
     Dim cellText As String
     Dim updatedText As String
 
@@ -1645,38 +1704,178 @@ Private Sub ApplyOutputTwoNamesToMissingReferences( _
     AddMatchedOutputTwoNames matchedNames, outputTableIds, tableMaster
     If matchedNames.Count = 0 Then Exit Sub
 
+    If hasTableNameReferenceData Then
+        ApplyStructuredOutputTableNames wsOutput, matchedNames, tableNameReferences
+        Exit Sub
+    End If
+
     lastRow = LastOutputRow(wsOutput, OUTPUT_LAST_COLUMN)
     If lastRow < 1 Then Exit Sub
     If lastRow = 1 Then
         ReDim referenceValues(1 To 1, 1 To 1)
+        ReDim joinHeadingValues(1 To 1, 1 To 1)
         referenceValues(1, 1) = wsOutput.Cells(1, 1).Value2
+        joinHeadingValues(1, 1) = wsOutput.Cells(1, 17).Value2
     Else
         referenceValues = wsOutput.Range( _
             wsOutput.Cells(1, 1), _
             wsOutput.Cells(lastRow, 1)).Value2
+        joinHeadingValues = wsOutput.Range( _
+            wsOutput.Cells(1, 17), _
+            wsOutput.Cells(lastRow, 17)).Value2
     End If
 
     referencePrefix = ReferenceTablesText() & ": "
     For rowNumber = 1 To lastRow
         cellText = CStr(referenceValues(rowNumber, 1))
         If StrComp(Left$(cellText, Len(referencePrefix)), referencePrefix, vbBinaryCompare) = 0 Then
-            updatedText = cellText
-            For Each tableId In matchedNames.Keys
-                missingToken = "(" & MissingNameText() & ")[" & CStr(tableId) & "]"
-                updatedText = Replace( _
-                    updatedText, _
-                    missingToken, _
-                    CStr(matchedNames(CStr(tableId))), _
-                    1, _
-                    -1, _
-                    vbTextCompare)
-            Next tableId
+            updatedText = ReplaceMissingOutputTableNames( _
+                cellText, matchedNames, False)
             If StrComp(updatedText, cellText, vbBinaryCompare) <> 0 Then
                 SetOutputCellText wsOutput.Cells(rowNumber, 1), updatedText
             End If
         End If
+
+        cellText = CStr(joinHeadingValues(rowNumber, 1))
+        If IsOutputJoinHeading(cellText) Then
+            ' JOIN条件セルと区別するため、物理IDと表示別名を持つ採番対象だけを補完する。
+            updatedText = ReplaceMissingOutputTableNames( _
+                cellText, matchedNames, True)
+            If StrComp(updatedText, cellText, vbBinaryCompare) <> 0 Then
+                SetOutputCellText wsOutput.Cells(rowNumber, 17), updatedText
+            End If
+        End If
     Next rowNumber
 End Sub
+
+' parserが特定したセル・物理ID・表示接尾辞だけを使って名称を補完
+Private Sub ApplyStructuredOutputTableNames( _
+    ByVal wsOutput As Worksheet, _
+    ByVal matchedNames As Object, _
+    ByVal tableNameReferences As Collection)
+
+    Dim tableNameReference As Variant
+    Dim rowNumber As Long
+    Dim columnNumber As Long
+    Dim sourceValue As String
+    Dim physicalTableId As String
+    Dim replacementText As String
+    Dim cellText As String
+    Dim updatedText As String
+
+    For Each tableNameReference In tableNameReferences
+        rowNumber = CLng(tableNameReference(0))
+        columnNumber = CLng(tableNameReference(1))
+        sourceValue = CStr(tableNameReference(2))
+        physicalTableId = NormalizePhysicalTableId(CStr(tableNameReference(3)))
+        If matchedNames.Exists(physicalTableId) Then
+            replacementText = CStr(matchedNames(physicalTableId)) & _
+                CStr(tableNameReference(4))
+            cellText = CStr(wsOutput.Cells(rowNumber, columnNumber).Value2)
+            updatedText = Replace( _
+                cellText, sourceValue, replacementText, 1, -1, vbTextCompare)
+            If StrComp(updatedText, cellText, vbBinaryCompare) <> 0 Then
+                SetOutputCellText wsOutput.Cells(rowNumber, columnNumber), updatedText
+            End If
+        End If
+    Next tableNameReference
+End Sub
+
+' 物理ID付きの未取得表示だけを対応するテーブル名称へ置換
+Private Function ReplaceMissingOutputTableNames( _
+    ByVal sourceText As String, _
+    ByVal matchedNames As Object, _
+    ByVal requireDisplayAlias As Boolean) As String
+
+    Dim tableId As Variant
+    Dim missingToken As String
+    Dim replacementText As String
+    Dim resultText As String
+
+    resultText = sourceText
+    For Each tableId In matchedNames.Keys
+        missingToken = "(" & MissingNameText() & ")[" & CStr(tableId) & "]"
+        replacementText = CStr(matchedNames(CStr(tableId)))
+        If requireDisplayAlias Then
+            missingToken = missingToken & "["
+            replacementText = replacementText & "["
+        End If
+        resultText = Replace( _
+            resultText, _
+            missingToken, _
+            replacementText, _
+            1, _
+            -1, _
+            vbTextCompare)
+    Next tableId
+    ReplaceMissingOutputTableNames = resultText
+End Function
+
+' parserが列Qへ生成するJOIN見出しだけを条件式や文字列から識別
+Private Function IsOutputJoinHeading(ByVal cellText As String) As Boolean
+    If Len(cellText) < 2 Then Exit Function
+    If Left$(cellText, 1) <> W(&HFF1C) Or Right$(cellText, 1) <> W(&HFF1E) Then Exit Function
+    IsOutputJoinHeading = InStr(1, cellText, " JOIN ", vbBinaryCompare) > 0
+End Function
+
+' Nレコードの元表示が参照一覧またはJOIN左右の1要素と完全一致することを確認
+Private Function IsOutputTableNameReference( _
+    ByVal cellText As String, _
+    ByVal columnNumber As Long, _
+    ByVal sourceValue As String) As Boolean
+
+    Dim referencePrefix As String
+    Dim joinText As String
+    Dim joinDelimiter As Variant
+    Dim delimiterPosition As Long
+
+    If columnNumber = 1 Then
+        referencePrefix = ReferenceTablesText() & ": "
+        If StrComp( _
+            Left$(cellText, Len(referencePrefix)), _
+            referencePrefix, _
+            vbBinaryCompare) <> 0 Then Exit Function
+        IsOutputTableNameReference = ContainsExactTableDisplay( _
+            Mid$(cellText, Len(referencePrefix) + 1), sourceValue)
+        Exit Function
+    End If
+
+    If columnNumber <> 17 Or Not IsOutputJoinHeading(cellText) Then Exit Function
+    joinText = Mid$(cellText, 2, Len(cellText) - 2)
+    For Each joinDelimiter In Array( _
+        " INNER JOIN ", _
+        " LEFT JOIN ", _
+        " RIGHT JOIN ", _
+        " FULL JOIN ", _
+        " JOIN ")
+        delimiterPosition = InStr( _
+            1, joinText, CStr(joinDelimiter), vbBinaryCompare)
+        If delimiterPosition > 0 Then
+            IsOutputTableNameReference = _
+                ContainsExactTableDisplay( _
+                    Left$(joinText, delimiterPosition - 1), sourceValue) Or _
+                ContainsExactTableDisplay( _
+                    Mid$(joinText, delimiterPosition + Len(CStr(joinDelimiter))), _
+                    sourceValue)
+            Exit Function
+        End If
+    Next joinDelimiter
+End Function
+
+' 読点区切りのテーブル表示に完全一致する要素があるかを確認
+Private Function ContainsExactTableDisplay( _
+    ByVal displayList As String, _
+    ByVal sourceValue As String) As Boolean
+
+    Dim displayItem As Variant
+
+    For Each displayItem In Split(displayList, W(&H3001))
+        If StrComp(CStr(displayItem), sourceValue, vbTextCompare) = 0 Then
+            ContainsExactTableDisplay = True
+            Exit Function
+        End If
+    Next displayItem
+End Function
 
 ' アウトプット②の明細対象かつ有効な名称を持つテーブルだけを辞書へ追加
 Private Sub AddMatchedOutputTwoNames( _

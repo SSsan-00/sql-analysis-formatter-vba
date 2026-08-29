@@ -2362,6 +2362,80 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
+    /// 未取得テーブル表示をセル位置・物理ID・表示別名と対応付けて返す
+    /// </summary>
+    [TestMethod]
+    public void Build_ReturnsStructuredMissingTableNameReferences()
+    {
+        const string sql = """
+            SELECT tb1.id
+            FROM city1 AS tb1
+            UNION
+            SELECT tb1.id
+            FROM city2 AS tb1
+            INNER JOIN districts ON districts.city_id = tb1.id
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.HasCount(5, plan.TableNameReferences);
+        Assert.IsTrue(plan.TableNameReferences.Contains(new OutputTableNameReference(
+            2,
+            1,
+            "(和名未取得)[city1][tb1]",
+            "city1",
+            "[tb1]")));
+        Assert.IsTrue(plan.TableNameReferences.Contains(new OutputTableNameReference(
+            2,
+            1,
+            "(和名未取得)[city2][tb2]",
+            "city2",
+            "[tb2]")));
+        Assert.IsTrue(plan.TableNameReferences.Contains(new OutputTableNameReference(
+            2,
+            1,
+            "(和名未取得)[districts]",
+            "districts",
+            "")));
+        Assert.IsTrue(plan.TableNameReferences.Contains(new OutputTableNameReference(
+            6,
+            17,
+            "(和名未取得)[city2][tb2]",
+            "city2",
+            "[tb2]")));
+        Assert.IsTrue(plan.TableNameReferences.Contains(new OutputTableNameReference(
+            6,
+            17,
+            "(和名未取得)[districts]",
+            "districts",
+            "")));
+    }
+
+    /// <summary>
+    /// 同じ未取得表示が複数の物理表を指す場合は名称補完を推測しない
+    /// </summary>
+    [TestMethod]
+    public void Build_SkipsAmbiguousMissingTableNameReferences()
+    {
+        const string sql = """
+            SELECT shared.id
+            FROM alpha AS shared
+            WHERE EXISTS (
+                SELECT 1
+                FROM beta AS shared
+                WHERE shared.id = 1)
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsFalse(plan.TableNameReferences.Any(item =>
+            string.Equals(
+                item.SourceValue,
+                "(和名未取得)[shared]",
+                StringComparison.OrdinalIgnoreCase)));
+    }
+
+    /// <summary>
     /// 同じ別名が同じ物理表を指すだけなら元の別名と従来表示を維持
     /// </summary>
     [TestMethod]

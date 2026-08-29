@@ -130,6 +130,7 @@ try {
         'AnalyzeQueries_UsesOutputTwoNameForExactMissingReference',
         'AnalyzeQueries_RenamesDuplicateUnionAliases',
         'AnalyzeQueries_ResolvesSyntheticUnionAliasNames',
+        'AnalyzeQueries_ResolvesSyntheticUnionAliasInJoinHeading',
         'AnalyzeQueries_PreservesBothUnionAliasesInOneSqlRow',
         'AnalyzeQueries_RendersSupportedTablesDuringPartialFallback',
         'AnalyzeQueries_SortsOutputTwoByCompositeTableNumber',

@@ -27,7 +27,7 @@ public sealed class VbaOutputProtocolTests
 
         var text = VbaOutputProtocol.SerializePlan(plan);
 
-        StringAssert.StartsWith(text, "SAF_OUTPUT_PLAN\t5\t3\t1");
+        StringAssert.StartsWith(text, "SAF_OUTPUT_PLAN\t6\t3\t1");
         StringAssert.Contains(
             text,
             "F\t2\t2\tWHEREの近くに正しくない構文があります。");
@@ -42,6 +42,7 @@ public sealed class VbaOutputProtocolTests
         var plan = new OutputSheetPlan(
             [
                 new OutputCell(1, 1, "見出し"),
+                new OutputCell(2, 1, "参照テーブル: (和名未取得)[users]"),
                 new OutputCell(3, 17, "line1\r\nline2\\value\tend")
             ],
             [
@@ -66,15 +67,26 @@ public sealed class VbaOutputProtocolTests
             [
                 new OutputReplacementValue(3, 4, "tb1.状態"),
                 new OutputReplacementValue(2, 8, "tb1.名前\\値\r\n表示名")
+            ],
+            TableNameReferences:
+            [
+                new OutputTableNameReference(
+                    2,
+                    1,
+                    "(和名未取得)[users]",
+                    "users",
+                    "")
             ]);
 
         var text = VbaOutputProtocol.SerializePlan(plan);
 
         var expected = string.Join(
             "\r\n",
-            "SAF_OUTPUT_PLAN\t5\t4\t0",
+            "SAF_OUTPUT_PLAN\t6\t4\t0",
             "C\t1\t1\t見出し",
+            "C\t2\t1\t参照テーブル: (和名未取得)[users]",
             "C\t3\t17\tline1\\r\\nline2\\\\value\\tend",
+            "N\t2\t1\t(和名未取得)[users]\tusers\t",
             "Q\t2\t8\t名前\ttb1.名前",
             "R\t2\tSELECT tb1.名前\\\\値\\tAS 表示名",
             "R\t3\tWHERE tb1.状態 = 1",

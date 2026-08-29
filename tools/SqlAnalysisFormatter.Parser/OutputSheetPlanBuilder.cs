@@ -17,6 +17,8 @@ public static class OutputSheetPlanBuilder
     private const int OffsetCaseMarkerColumn = 27;
     private const int OffsetCaseDetailColumn = 28;
     private static readonly AsyncLocal<DisplayAliasContext?> CurrentDisplayAliases = new();
+    private static readonly AsyncLocal<List<MissingTableDisplayCandidate>?>
+        CurrentMissingTableDisplays = new();
 
     /// <summary>
     /// 和名変換済みSQLから描画計画を作成
@@ -26,6 +28,30 @@ public static class OutputSheetPlanBuilder
         ArgumentNullException.ThrowIfNull(sql);
         ArgumentNullException.ThrowIfNull(mappings);
 
+        var previousCandidates = CurrentMissingTableDisplays.Value;
+        var candidates = new List<MissingTableDisplayCandidate>();
+        CurrentMissingTableDisplays.Value = candidates;
+        try
+        {
+            var plan = BuildCore(sql, mappings);
+            return plan with
+            {
+                TableNameReferences = BuildTableNameReferences(plan, candidates)
+            };
+        }
+        finally
+        {
+            CurrentMissingTableDisplays.Value = previousCandidates;
+        }
+    }
+
+    /// <summary>
+    /// SQL解析本体を実行し、物理テーブル表示の収集スコープは呼出元で管理
+    /// </summary>
+    private static OutputSheetPlan BuildCore(
+        string sql,
+        IReadOnlyList<MappingDefinition> mappings)
+    {
         var sourceScript = ParseScript(sql, out var errors);
         if (errors.Count > 0 || sourceScript is null)
         {
@@ -101,6 +127,124 @@ public static class OutputSheetPlanBuilder
                 qualifiedAliasReplacements)
         };
         return ParserFieldIdentifierRestorer.Restore(plan, mappings);
+    }
+
+    /// <summary>
+    /// 参照テーブル行とJOIN見出しにある一意な物理テーブル表示を補完対象として返す
+    /// </summary>
+    private static IReadOnlyList<OutputTableNameReference> BuildTableNameReferences(
+        OutputSheetPlan plan,
+        IReadOnlyList<MissingTableDisplayCandidate> candidates)
+    {
+        if (candidates.Count == 0)
+        {
+            return [];
+        }
+
+        var uniqueCandidates = candidates
+            .GroupBy(candidate => candidate.SourceValue, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group
+                .Select(candidate => candidate.PhysicalTableId)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(2)
+                .Count() == 1)
+            .Where(group => group
+                .Select(candidate => candidate.ReplacementSuffix)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(2)
+                .Count() == 1)
+            .Select(group => group.First())
+            .OrderByDescending(candidate => candidate.SourceValue.Length)
+            .ThenBy(candidate => candidate.SourceValue, StringComparer.Ordinal)
+            .ToArray();
+        var references = new List<OutputTableNameReference>();
+        foreach (var cell in plan.Cells.Where(IsTableNameReferenceCell))
+        {
+            foreach (var candidate in uniqueCandidates)
+            {
+                if (!ContainsTableDisplay(cell, candidate))
+                {
+                    continue;
+                }
+
+                references.Add(new OutputTableNameReference(
+                    cell.Row,
+                    cell.Column,
+                    candidate.SourceValue,
+                    candidate.PhysicalTableId,
+                    candidate.ReplacementSuffix));
+            }
+        }
+
+        return references;
+    }
+
+    /// <summary>
+    /// テーブル表示だけを持つ帳票セルを条件式やSQL文字列のセルから分離
+    /// </summary>
+    private static bool IsTableNameReferenceCell(OutputCell cell)
+    {
+        if (cell.Column == 1 &&
+            cell.Value.StartsWith("参照テーブル: ", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return cell.Column == 17 &&
+            cell.Value.StartsWith('＜') &&
+            cell.Value.EndsWith('＞') &&
+            cell.Value.Contains(" JOIN ", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 参照一覧またはJOIN左右の表示要素と完全一致する候補だけを採用
+    /// </summary>
+    private static bool ContainsTableDisplay(
+        OutputCell cell,
+        MissingTableDisplayCandidate candidate)
+    {
+        IEnumerable<string> displays;
+        if (cell.Column == 1)
+        {
+            const string prefix = "参照テーブル: ";
+            displays = cell.Value[prefix.Length..].Split('、');
+        }
+        else
+        {
+            var joinText = cell.Value[1..^1];
+            var delimiter = new[]
+                {
+                    " INNER JOIN ",
+                    " LEFT JOIN ",
+                    " RIGHT JOIN ",
+                    " FULL JOIN ",
+                    " JOIN "
+                }
+                .First(item => joinText.Contains(item, StringComparison.Ordinal));
+            displays = joinText
+                .Split(delimiter, 2, StringSplitOptions.None)
+                .SelectMany(side => side.Split('、'));
+        }
+
+        return displays.Any(display => string.Equals(
+            display,
+            candidate.SourceValue,
+            StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// parserが物理テーブルを一意に把握した未取得表示を構造化して収集
+    /// </summary>
+    private static string RegisterMissingTableDisplay(
+        string sourceValue,
+        string physicalTableId,
+        string replacementSuffix)
+    {
+        CurrentMissingTableDisplays.Value?.Add(new MissingTableDisplayCandidate(
+            sourceValue,
+            physicalTableId,
+            replacementSuffix));
+        return sourceValue;
     }
 
     /// <summary>
@@ -1314,7 +1458,10 @@ public static class OutputSheetPlanBuilder
     {
         if (tableName == MissingName)
         {
-            return $"{MissingName}[{physicalTableId}]";
+            return RegisterMissingTableDisplay(
+                $"{MissingName}[{physicalTableId}]",
+                physicalTableId,
+                string.Empty);
         }
 
         return includeIdentifier ? $"{tableName}[{tableId}]" : tableName;
@@ -3709,10 +3856,22 @@ public static class OutputSheetPlanBuilder
             table.Alias is not null &&
             CurrentDisplayAliases.Value?.ShouldPreservePhysicalTableId(table) == true)
         {
-            return $"{MissingName}[{physicalTableId}][{tableId}]";
+            return RegisterMissingTableDisplay(
+                $"{MissingName}[{physicalTableId}][{tableId}]",
+                physicalTableId,
+                $"[{tableId}]");
         }
 
-        return $"{tableName}[{tableId}]";
+        var display = $"{tableName}[{tableId}]";
+        if (tableName != MissingName)
+        {
+            return display;
+        }
+
+        return RegisterMissingTableDisplay(
+            display,
+            physicalTableId,
+            table.Alias is null ? string.Empty : $"[{tableId}]");
     }
 
     /// <summary>
@@ -3768,9 +3927,18 @@ public static class OutputSheetPlanBuilder
             physicalTableId is not null &&
             aliases?.ShouldPreservePhysicalTableId(tableId) == true)
         {
-            return $"{MissingName}[{physicalTableId}][{displayTableId}]";
+            return RegisterMissingTableDisplay(
+                $"{MissingName}[{physicalTableId}][{displayTableId}]",
+                physicalTableId,
+                $"[{displayTableId}]");
         }
-        return $"{tableName}[{displayTableId}]";
+        var display = $"{tableName}[{displayTableId}]";
+        return tableName == MissingName && physicalTableId is not null
+            ? RegisterMissingTableDisplay(
+                display,
+                physicalTableId,
+                $"[{displayTableId}]")
+            : display;
     }
 
     /// <summary>
@@ -5423,6 +5591,11 @@ public static class OutputSheetPlanBuilder
         string DisplayAlias,
         string PhysicalTableId,
         bool PreservePhysicalTableId);
+
+    private sealed record MissingTableDisplayCandidate(
+        string SourceValue,
+        string PhysicalTableId,
+        string ReplacementSuffix);
 
     private sealed record BranchDisplayAliases(
         QuerySpecification Query,

@@ -36,6 +36,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_UsesOutputTwoNameForExactMissingReference
     AnalyzeQueries_RenamesDuplicateUnionAliases
     AnalyzeQueries_ResolvesSyntheticUnionAliasNames
+    AnalyzeQueries_ResolvesSyntheticUnionAliasInJoinHeading
     AnalyzeQueries_PreservesBothUnionAliasesInOneSqlRow
     AnalyzeQueries_RendersSupportedTablesDuringPartialFallback
     AnalyzeQueries_SortsOutputTwoByCompositeTableNumber
@@ -712,7 +713,7 @@ Public Sub AnalyzeQueries_UsesOutputTwoNameForExactMissingReference()
 
     missingNameText = "(" & W(&H548C, &H540D, &H672A, &H53D6, &H5F97) & ")"
     expectedReference = ReferenceTablesText() & ": user master" & W(&H3001) & _
-        missingNameText & "[o]" & W(&H3001) & _
+        "order master[o]" & W(&H3001) & _
         missingNameText & "[audit_logs]" & W(&H3001) & _
         definitionLocationName & "[locations]"
     AssertCellValue wsOutput.Cells(2, 1), expectedReference
@@ -829,6 +830,86 @@ Public Sub AnalyzeQueries_ResolvesSyntheticUnionAliasNames()
     wsRef.Range("A3:D3").ClearContents
     AnalyzeQueries False
     AssertCellValue wsOutput.Cells(2, 1), expectedReference
+    wsTableList.Range("A2:C200").ClearContents
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' 採番済み別名のJOIN見出しを物理IDで補完し、条件や文字列は同じ別名へ保つことを確認
+Public Sub AnalyzeQueries_ResolvesSyntheticUnionAliasInJoinHeading()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim wsOutputTwo As Worksheet
+    Dim wsTableList As Worksheet
+    Dim missingNameText As String
+    Dim literalText As String
+    Dim expectedReference As String
+    Dim expectedJoinHeading As String
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+    Set wsOutputTwo = ThisWorkbook.Worksheets(OutputSheetTwoName())
+    Set wsTableList = ThisWorkbook.Worksheets(TableListSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    wsTableList.Range("A2:C200").ClearContents
+    missingNameText = "(" & W(&H548C, &H540D, &H672A, &H53D6, &H5F97) & ")"
+    literalText = missingNameText & "[b][tb3]"
+    PutDefinition wsRef, 2, "a", "table A", "", ""
+    PutDefinition wsRef, 3, "tb2", "table C", "", ""
+    PutDefinition wsRef, 4, "tb3", "unrelated definition", "", ""
+    PutTableListRow wsTableList, 2, "a", "table A", "1-1"
+    PutTableListRow wsTableList, 3, "b", "table B", "1-2"
+    PutTableListRow wsTableList, 4, "lookup", "lookup master", "1-3"
+    PutTableListRow wsTableList, 5, "tb2", "table C", "1-4"
+    PutTableListRow wsTableList, 6, "tb3", "wrong table", "9-9"
+    wsSql.Cells(2, COL_SQL).Value = _
+        "SELECT '" & literalText & "' FROM a AS tb1"
+    wsSql.Cells(3, COL_SQL).Value = "UNION"
+    wsSql.Cells(4, COL_SQL).Value = _
+        "SELECT '" & literalText & "' FROM b AS tb1"
+    wsSql.Cells(5, COL_SQL).Value = _
+        "INNER JOIN lookup ON lookup.id = tb1.id"
+    wsSql.Cells(6, COL_SQL).Value = "UNION"
+    wsSql.Cells(7, COL_SQL).Value = _
+        "SELECT '" & literalText & "' FROM tb2;"
+
+    AnalyzeQueries False
+
+    expectedReference = ReferenceTablesText() & ": table A[tb1]" & _
+        W(&H3001) & "table B[tb3]" & W(&H3001) & _
+        "lookup master" & W(&H3001) & "table C[tb2]"
+    expectedJoinHeading = W(&HFF1C) & "table B[tb3] INNER JOIN " & _
+        "lookup master" & W(&HFF1E)
+    AssertCellValue wsOutput.Cells(2, 1), expectedReference
+    AssertCellValue wsOutput.Cells(5, 17), "'" & literalText & "'"
+    AssertCellValue wsOutput.Cells(6, 17), expectedJoinHeading
+    AssertCellValue wsOutput.Cells(7, 17), "lookup.id = tb3.id"
+    AssertCellValue wsSql.Cells(4, COL_RESULT), _
+        "SELECT '" & literalText & "' FROM b AS tb3"
+    AssertCellValue wsSql.Cells(5, COL_RESULT), _
+        "INNER JOIN lookup ON lookup.id = tb3.id"
+    AssertOutputTwoRow wsOutputTwo, 4, 1, "a", "table A", "1-1"
+    AssertOutputTwoRow wsOutputTwo, 5, 1, "b", "table B", "1-2"
+    AssertOutputTwoRow wsOutputTwo, 6, 1, "lookup", "lookup master", "1-3"
+    AssertOutputTwoRow wsOutputTwo, 7, 1, "tb2", "table C", "1-4"
+    AssertCellValue wsOutputTwo.Range("C8"), ""
+
+    ' 物理ID b の名称がない場合は、無関係な人工別名 tb3 の名称を使わない
+    wsTableList.Cells(3, 2).ClearContents
+    AnalyzeQueries False
+    expectedJoinHeading = W(&HFF1C) & missingNameText & _
+        "[b][tb3] INNER JOIN lookup master" & W(&HFF1E)
+    AssertCellValue wsOutput.Cells(5, 17), "'" & literalText & "'"
+    AssertCellValue wsOutput.Cells(6, 17), expectedJoinHeading
+    AssertCellValue wsOutput.Cells(7, 17), "lookup.id = tb3.id"
+    AssertCellValue wsOutputTwo.Range("S5"), ""
     wsTableList.Range("A2:C200").ClearContents
 End Sub
 
