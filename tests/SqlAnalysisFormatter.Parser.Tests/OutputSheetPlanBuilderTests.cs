@@ -2048,6 +2048,95 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
+    /// UNION分岐で物理テーブル定義と元別名定義が競合しても物理テーブル名を優先
+    /// </summary>
+    [TestMethod]
+    public void Build_PrefersPhysicalUnionTableNameWhenAliasMappingConflicts()
+    {
+        const string sql = "SELECT * FROM company1 AS tb1 UNION SELECT * FROM company2 AS tb1";
+        MappingDefinition[] mappings =
+        [
+            new("company1", "会社1", "", ""),
+            new("company2", "会社2", "", ""),
+            new("tb1", "別名1", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(
+            "参照テーブル: 会社1[tb1]、会社2[tb2]",
+            CellValue(plan, 2, 1));
+    }
+
+    /// <summary>
+    /// UNION分岐内のCROSS JOINも参照テーブルと別名採番へ含める
+    /// </summary>
+    [TestMethod]
+    public void Build_EnumeratesUnqualifiedUnionJoinTablesAndRenamesAliases()
+    {
+        const string sql = "SELECT tb1.id FROM company1 AS tb1 " +
+            "UNION SELECT tb1.id FROM company2 AS tb1 CROSS JOIN region AS tb2";
+        MappingDefinition[] mappings =
+        [
+            new("company1", "会社1", "", ""),
+            new("company2", "会社2", "", ""),
+            new("region", "地域", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(
+            "参照テーブル: 会社1[tb1]、会社2[tb3]、地域[tb2]",
+            CellValue(plan, 2, 1));
+        Assert.AreEqual(
+            "SELECT tb1.id FROM company1 AS tb1 UNION " +
+            "SELECT tb3.id FROM company2 AS tb3 CROSS JOIN region AS tb2",
+            plan.TransformedQueryLines.Single().Value);
+    }
+
+    /// <summary>
+    /// UNIONの同一分岐内で重複した別名を推測変換せずフォールバックする
+    /// </summary>
+    [TestMethod]
+    public void Build_FallsBackForDuplicateAliasesWithinUnionBranch()
+    {
+        const string sql = "SELECT tb1.id FROM a AS tb1 JOIN b AS tb1 " +
+            "ON tb1.id = tb1.id UNION SELECT tb1.id FROM c AS tb1";
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsTrue(plan.IsFallback);
+        StringAssert.Contains(plan.FallbackReason, "同一分岐内でテーブル別名が重複しています: tb1");
+        Assert.AreEqual(sql, plan.TransformedQueryLines.Single().Value);
+    }
+
+    /// <summary>
+    /// UNION全体に付くORDER BY/OFFSETを分岐の外側へ出力する
+    /// </summary>
+    [TestMethod]
+    public void Build_WritesCompoundOrderByAndOffset()
+    {
+        const string sql = "SELECT tb1.id FROM company1 AS tb1 " +
+            "UNION SELECT tb1.id FROM company2 AS tb1 " +
+            "ORDER BY tb1.id DESC OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY";
+        MappingDefinition[] mappings =
+        [
+            new("company1", "会社1", "", ""),
+            new("company2", "会社2", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("取得範囲", CellValue(plan, 6, 1));
+        Assert.AreEqual("OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY", CellValue(plan, 6, 7));
+        Assert.AreEqual("並び順", CellValue(plan, 7, 1));
+        Assert.AreEqual("tb1.id(降順)", CellValue(plan, 7, 17));
+    }
+
+    /// <summary>
     /// UNION分岐で同じ別名が異なる物理表を指す場合は表示別名を一意化
     /// </summary>
     [TestMethod]
@@ -2350,11 +2439,11 @@ public sealed class OutputSheetPlanBuilderTests
         Assert.IsFalse(plan.IsFallback);
         Assert.AreEqual(
             "参照テーブル: (和名未取得)[city1][tb1]、" +
-            "(和名未取得)[city2][tb3]、(和名未取得)[tb2]",
+            "(和名未取得)[city2][tb3]、地域[tb2]",
             CellValue(plan, 2, 1));
         Assert.IsTrue(values.Contains("tb3.status = 2 → tb3.id"));
         Assert.IsTrue(values.Contains(
-            "＜(和名未取得)[city2][tb3] INNER JOIN (和名未取得)[tb2]＞"));
+            "＜(和名未取得)[city2][tb3] INNER JOIN 地域[tb2]＞"));
         Assert.IsTrue(values.Contains("tb2.id = tb3.region_id"));
         Assert.IsTrue(values.Contains("tb3.code = 'tb1.code'"));
         Assert.IsTrue(values.Contains("tb3.status"));

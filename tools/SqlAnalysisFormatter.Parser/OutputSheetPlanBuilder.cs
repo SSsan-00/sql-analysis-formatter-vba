@@ -1560,6 +1560,13 @@ public static class OutputSheetPlanBuilder
             }
         }
 
+        // UNION全体に付くORDER BY/OFFSETは、個別分岐ではなくフレーム末尾へ一度だけ出力する。
+        using (PushDisplayAliases(binaryAliases.ContextFor(branches[0])))
+        {
+            WriteOffsetSection(cells, sections, sql, binary.OffsetClause, ref row);
+            WriteOrderBySection(cells, sections, sql, binary.OrderByClause, ref row);
+        }
+
         return new OutputSheetPlan(cells, sections, row - 1, false);
     }
 
@@ -1813,39 +1820,7 @@ public static class OutputSheetPlanBuilder
         };
         var row = 3;
 
-        if (query.OffsetClause is not null)
-        {
-            var startRow = row;
-            cells.Add(new OutputCell(row, 1, "取得範囲"));
-            var cases = DirectCaseExpressions(query.OffsetClause);
-            if (cases.Count == 0)
-            {
-                cells.Add(new OutputCell(
-                    row,
-                    7,
-                    DisplayText(sql, query.OffsetClause, uppercaseOffsetKeywords: true)));
-                row++;
-            }
-            else
-            {
-                cells.Add(new OutputCell(
-                    row,
-                    7,
-                    RenderExpressionWithCasePlaceholders(
-                        sql,
-                        query.OffsetClause,
-                        cases,
-                        uppercaseOffsetKeywords: true)));
-                cells.Add(new OutputCell(row, OffsetCaseMarkerColumn, "※"));
-                row += WriteEmbeddedCaseBranches(
-                    cells,
-                    sql,
-                    cases,
-                    row,
-                    OffsetCaseDetailColumn);
-            }
-            sections.Add(new OutputSection(OutputSectionKind.Standard, startRow, row - 1));
-        }
+        WriteOffsetSection(cells, sections, sql, query.OffsetClause, ref row);
 
         if (query.TopRowFilter is not null)
         {
@@ -1913,50 +1888,114 @@ public static class OutputSheetPlanBuilder
             WriteConditionSection(cells, sections, sql, "集計条件", query.HavingClause.SearchCondition, ref row);
         }
 
-        if (query.OrderByClause is not null && query.OrderByClause.OrderByElements.Count > 0)
-        {
-            var startRow = row;
-            for (var index = 0; index < query.OrderByClause.OrderByElements.Count; index++)
-            {
-                var element = query.OrderByClause.OrderByElements[index];
-                if (index == 0)
-                {
-                    cells.Add(new OutputCell(row, 1, "並び順"));
-                }
-
-                cells.Add(new OutputCell(row, 7, $"ソートキー{index + 1}"));
-                cells.Add(new OutputCell(row, 15, ":"));
-                var cases = DirectCaseExpressions(element.Expression);
-                if (cases.Count > 0)
-                {
-                    row += WriteScalarExpression(
-                        cells,
-                        sql,
-                        element.Expression,
-                        row,
-                        displayName: null,
-                        valueSuffix: element.SortOrder == SortOrder.Descending ? "(降順)" : string.Empty);
-                }
-                else
-                {
-                    var value = DisplayText(sql, element.Expression);
-                    if (element.SortOrder == SortOrder.Descending)
-                    {
-                        value += "(降順)";
-                    }
-
-                    cells.Add(new OutputCell(row, 17, value));
-                    row++;
-                }
-            }
-            sections.Add(new OutputSection(OutputSectionKind.Standard, startRow, row - 1));
-        }
+        WriteOrderBySection(cells, sections, sql, query.OrderByClause, ref row);
 
         return new OutputSheetPlan(
             cells,
             sections,
             row - 1,
             false);
+    }
+
+    /// <summary>
+    /// OFFSET/FETCHを帳票へ追加
+    /// </summary>
+    private static void WriteOffsetSection(
+        ICollection<OutputCell> cells,
+        ICollection<OutputSection> sections,
+        string sql,
+        OffsetClause? offsetClause,
+        ref int row)
+    {
+        if (offsetClause is null)
+        {
+            return;
+        }
+
+        var startRow = row;
+        cells.Add(new OutputCell(row, 1, "取得範囲"));
+        var cases = DirectCaseExpressions(offsetClause);
+        if (cases.Count == 0)
+        {
+            cells.Add(new OutputCell(
+                row,
+                7,
+                DisplayText(sql, offsetClause, uppercaseOffsetKeywords: true)));
+            row++;
+        }
+        else
+        {
+            cells.Add(new OutputCell(
+                row,
+                7,
+                RenderExpressionWithCasePlaceholders(
+                    sql,
+                    offsetClause,
+                    cases,
+                    uppercaseOffsetKeywords: true)));
+            cells.Add(new OutputCell(row, OffsetCaseMarkerColumn, "※"));
+            row += WriteEmbeddedCaseBranches(
+                cells,
+                sql,
+                cases,
+                row,
+                OffsetCaseDetailColumn);
+        }
+
+        sections.Add(new OutputSection(OutputSectionKind.Standard, startRow, row - 1));
+    }
+
+    /// <summary>
+    /// ORDER BYを帳票へ追加
+    /// </summary>
+    private static void WriteOrderBySection(
+        ICollection<OutputCell> cells,
+        ICollection<OutputSection> sections,
+        string sql,
+        OrderByClause? orderByClause,
+        ref int row)
+    {
+        if (orderByClause is null || orderByClause.OrderByElements.Count == 0)
+        {
+            return;
+        }
+
+        var startRow = row;
+        for (var index = 0; index < orderByClause.OrderByElements.Count; index++)
+        {
+            var element = orderByClause.OrderByElements[index];
+            if (index == 0)
+            {
+                cells.Add(new OutputCell(row, 1, "並び順"));
+            }
+
+            cells.Add(new OutputCell(row, 7, $"ソートキー{index + 1}"));
+            cells.Add(new OutputCell(row, 15, ":"));
+            var cases = DirectCaseExpressions(element.Expression);
+            if (cases.Count > 0)
+            {
+                row += WriteScalarExpression(
+                    cells,
+                    sql,
+                    element.Expression,
+                    row,
+                    displayName: null,
+                    valueSuffix: element.SortOrder == SortOrder.Descending ? "(降順)" : string.Empty);
+            }
+            else
+            {
+                var value = DisplayText(sql, element.Expression);
+                if (element.SortOrder == SortOrder.Descending)
+                {
+                    value += "(降順)";
+                }
+
+                cells.Add(new OutputCell(row, 17, value));
+                row++;
+            }
+        }
+
+        sections.Add(new OutputSection(OutputSectionKind.Standard, startRow, row - 1));
     }
 
     /// <summary>
@@ -3551,17 +3590,18 @@ public static class OutputSheetPlanBuilder
     /// </summary>
     private static IEnumerable<QualifiedJoin> EnumerateJoins(TableReference table)
     {
-        if (table is not QualifiedJoin join)
+        foreach (var child in EnumerateChildTableReferences(table))
         {
-            yield break;
+            foreach (var innerJoin in EnumerateJoins(child))
+            {
+                yield return innerJoin;
+            }
         }
 
-        foreach (var innerJoin in EnumerateJoins(join.FirstTableReference))
+        if (table is QualifiedJoin join)
         {
-            yield return innerJoin;
+            yield return join;
         }
-
-        yield return join;
     }
 
     /// <summary>
@@ -3588,15 +3628,37 @@ public static class OutputSheetPlanBuilder
                     inlineDerivedId,
                     $"派生テーブル[{inlineDerivedId}]");
                 break;
-            case QualifiedJoin join:
-                foreach (var display in EnumerateJoinTables(join.FirstTableReference, mappings))
+            case JoinTableReference:
+                foreach (var child in EnumerateChildTableReferences(table))
+                {
+                    foreach (var display in EnumerateJoinTables(child, mappings))
+                    {
+                        yield return display;
+                    }
+                }
+                break;
+            case JoinParenthesisTableReference parenthesized:
+                foreach (var display in EnumerateJoinTables(parenthesized.Join, mappings))
                 {
                     yield return display;
                 }
-                foreach (var display in EnumerateJoinTables(join.SecondTableReference, mappings))
-                {
-                    yield return display;
-                }
+                break;
+        }
+    }
+
+    /// <summary>
+    /// テーブル参照ツリーの子要素を左から列挙
+    /// </summary>
+    private static IEnumerable<TableReference> EnumerateChildTableReferences(TableReference table)
+    {
+        switch (table)
+        {
+            case JoinTableReference join:
+                yield return join.FirstTableReference;
+                yield return join.SecondTableReference;
+                break;
+            case JoinParenthesisTableReference parenthesized:
+                yield return parenthesized.Join;
                 break;
         }
     }
@@ -3804,16 +3866,21 @@ public static class OutputSheetPlanBuilder
             case NamedTableReference named:
                 yield return BuildTableDisplay(named, mappings, allowStandaloneTableName);
                 break;
-            case QualifiedJoin join:
-                foreach (var display in EnumerateTableDisplays(
-                    join.FirstTableReference,
-                    mappings,
-                    allowStandaloneTableName))
+            case JoinTableReference:
+                foreach (var child in EnumerateChildTableReferences(table))
                 {
-                    yield return display;
+                    foreach (var display in EnumerateTableDisplays(
+                        child,
+                        mappings,
+                        allowStandaloneTableName))
+                    {
+                        yield return display;
+                    }
                 }
+                break;
+            case JoinParenthesisTableReference parenthesized:
                 foreach (var display in EnumerateTableDisplays(
-                    join.SecondTableReference,
+                    parenthesized.Join,
                     mappings,
                     allowStandaloneTableName))
                 {
@@ -3890,6 +3957,17 @@ public static class OutputSheetPlanBuilder
                 mappings);
         }
 
+        if (CurrentDisplayAliases.Value?.ShouldPreservePhysicalTableId(table) == true)
+        {
+            var physicalName = ResolveTableName(
+                table.SchemaObject.BaseIdentifier.Value,
+                mappings);
+            if (physicalName != MissingName)
+            {
+                return physicalName;
+            }
+        }
+
         var sourceName = ResolveTableName(table, mappings);
         if (sourceName != MissingName ||
             CurrentDisplayAliases.Value?.ShouldPreservePhysicalTableId(table) != true)
@@ -3942,7 +4020,7 @@ public static class OutputSheetPlanBuilder
     }
 
     /// <summary>
-    /// 一時テーブルは別名で未解決の場合に物理名でも和名を検索
+    /// 物理テーブル名を優先し、未解決の場合だけ元の別名で和名を検索
     /// </summary>
     private static string ResolveTableName(
         NamedTableReference table,
@@ -3950,15 +4028,34 @@ public static class OutputSheetPlanBuilder
     {
         var baseTableId = table.SchemaObject.BaseIdentifier.Value;
         var displayTableId = table.Alias?.Value ?? baseTableId;
-        var tableName = ResolveTableName(displayTableId, mappings);
-        if (tableName == MissingName &&
-            baseTableId.StartsWith('#') &&
-            !string.Equals(baseTableId, displayTableId, StringComparison.OrdinalIgnoreCase))
+        var physicalNames = ResolveTableNames(baseTableId, mappings);
+        if (physicalNames.Count == 1)
         {
-            tableName = ResolveTableName(baseTableId, mappings);
+            return physicalNames[0];
+        }
+        if (physicalNames.Count > 1)
+        {
+            return MissingName;
         }
 
-        return tableName;
+        var displayNames = ResolveTableNames(displayTableId, mappings);
+        return displayNames.Count == 1 ? displayNames[0] : MissingName;
+    }
+
+    /// <summary>
+    /// テーブルIDに紐づく一意な和名候補を列挙
+    /// </summary>
+    private static IReadOnlyList<string> ResolveTableNames(
+        string tableId,
+        IReadOnlyList<MappingDefinition> mappings)
+    {
+        return mappings
+            .Where(mapping => string.Equals(mapping.TableId, tableId, StringComparison.OrdinalIgnoreCase))
+            .Select(mapping => mapping.TableName.Trim())
+            .Where(tableName => !string.IsNullOrWhiteSpace(tableName))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(2)
+            .ToArray();
     }
 
     /// <summary>
@@ -3968,15 +4065,8 @@ public static class OutputSheetPlanBuilder
         string tableId,
         IReadOnlyList<MappingDefinition> mappings)
     {
-        var tableName = mappings
-            .FirstOrDefault(mapping => string.Equals(mapping.TableId, tableId, StringComparison.OrdinalIgnoreCase))
-            ?.TableName;
-        if (string.IsNullOrWhiteSpace(tableName))
-        {
-            tableName = MissingName;
-        }
-
-        return tableName;
+        var tableNames = ResolveTableNames(tableId, mappings);
+        return tableNames.Count == 1 ? tableNames[0] : MissingName;
     }
 
     /// <summary>
@@ -4010,12 +4100,17 @@ public static class OutputSheetPlanBuilder
             case NamedTableReference named:
                 yield return named;
                 break;
-            case QualifiedJoin join:
-                foreach (var item in EnumerateNamedTables(join.FirstTableReference))
+            case JoinTableReference:
+                foreach (var child in EnumerateChildTableReferences(table))
                 {
-                    yield return item;
+                    foreach (var item in EnumerateNamedTables(child))
+                    {
+                        yield return item;
+                    }
                 }
-                foreach (var item in EnumerateNamedTables(join.SecondTableReference))
+                break;
+            case JoinParenthesisTableReference parenthesized:
+                foreach (var item in EnumerateNamedTables(parenthesized.Join))
                 {
                     yield return item;
                 }
@@ -4039,12 +4134,17 @@ public static class OutputSheetPlanBuilder
             case InlineDerivedTable inlineDerived when inlineDerived.Alias is not null:
                 yield return inlineDerived.Alias.Value;
                 break;
-            case QualifiedJoin join:
-                foreach (var identifier in EnumerateTableIdentifiers(join.FirstTableReference))
+            case JoinTableReference:
+                foreach (var child in EnumerateChildTableReferences(table))
                 {
-                    yield return identifier;
+                    foreach (var identifier in EnumerateTableIdentifiers(child))
+                    {
+                        yield return identifier;
+                    }
                 }
-                foreach (var identifier in EnumerateTableIdentifiers(join.SecondTableReference))
+                break;
+            case JoinParenthesisTableReference parenthesized:
+                foreach (var identifier in EnumerateTableIdentifiers(parenthesized.Join))
                 {
                     yield return identifier;
                 }
@@ -5138,6 +5238,17 @@ public static class OutputSheetPlanBuilder
                 var namedTables = branch.FromClause?.TableReferences
                     .SelectMany(EnumerateNamedTables)
                     .ToArray() ?? [];
+                var duplicateAlias = branch.FromClause?.TableReferences
+                    .SelectMany(EnumerateTableIdentifiers)
+                    .Where(identifier => identifier.Length > 0)
+                    .GroupBy(identifier => identifier, StringComparer.OrdinalIgnoreCase)
+                    .FirstOrDefault(group => group.Count() > 1);
+                if (duplicateAlias is not null)
+                {
+                    throw new UnsupportedOutputException(
+                        "同一分岐内でテーブル別名が重複しています: " + duplicateAlias.Key,
+                        branch);
+                }
                 foreach (var table in namedTables)
                 {
                     if (table.Alias is null)
@@ -5311,6 +5422,7 @@ public static class OutputSheetPlanBuilder
                 branch.Accept(this);
             }
             node.OrderByClause?.Accept(this);
+            node.OffsetClause?.Accept(this);
         }
     }
 
