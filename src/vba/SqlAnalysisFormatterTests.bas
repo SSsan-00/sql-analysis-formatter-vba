@@ -35,6 +35,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_ClassifiesModificationTargetsByRole
     AnalyzeQueries_UsesOutputTwoNameForExactMissingReference
     AnalyzeQueries_RenamesDuplicateUnionAliases
+    AnalyzeQueries_DoesNotReuseCollidingUnionAliasName
     AnalyzeQueries_ResolvesSyntheticUnionAliasNames
     AnalyzeQueries_ResolvesSyntheticUnionAliasInJoinHeading
     AnalyzeQueries_PreservesBothUnionAliasesInOneSqlRow
@@ -775,6 +776,52 @@ Public Sub AnalyzeQueries_RenamesDuplicateUnionAliases()
     AssertOutputTwoRow wsOutputTwo, 4, 1, "city1", "city one", "1-1"
     AssertOutputTwoRow wsOutputTwo, 5, 1, "city2", "city two", "1-2"
     AssertCellValue wsOutputTwo.Range("BC4"), ""
+    wsTableList.Range("A2:C200").ClearContents
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' UNIONで衝突した元別名の和名を別物理表へ流用せず、テーブル一覧から補完することを確認
+Public Sub AnalyzeQueries_DoesNotReuseCollidingUnionAliasName()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim wsOutputTwo As Worksheet
+    Dim wsTableList As Worksheet
+    Dim expectedReference As String
+
+    If Not ExternalParserConfigured() Then Exit Sub
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+    Set wsOutputTwo = ThisWorkbook.Worksheets(OutputSheetTwoName())
+    Set wsTableList = ThisWorkbook.Worksheets(TableListSheetName())
+
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    wsOutput.Cells.ClearContents
+    wsTableList.Range("A2:C200").ClearContents
+    PutDefinition wsRef, 2, "tb1", "company two", "id", "ID"
+    PutDefinition wsRef, 3, "department", "department", "id", "ID"
+    PutDefinition wsRef, 4, "company2", "company two", "id", "ID"
+    PutTableListRow wsTableList, 2, "company1", "company one", "1-1"
+    PutTableListRow wsTableList, 3, "department", "department", "1-2"
+    PutTableListRow wsTableList, 4, "company2", "company two", "1-3"
+    wsSql.Cells(2, COL_SQL).Value = _
+        "SELECT tb1.id FROM company1 AS tb1 " & _
+        "JOIN department AS tb2 ON tb1.department_id = tb2.id " & _
+        "UNION SELECT tb1.id FROM company2 AS tb1 " & _
+        "JOIN department AS tb2 ON tb1.department_id = tb2.id;"
+
+    AnalyzeQueries False
+
+    expectedReference = ReferenceTablesText() & ": company one[tb1]" & _
+        W(&H3001) & "department[tb2]" & W(&H3001) & "company two[tb3]"
+    AssertCellValue wsOutput.Cells(2, 1), expectedReference
+    AssertOutputTwoRow wsOutputTwo, 4, 1, "company1", "company one", "1-1"
+    AssertOutputTwoRow wsOutputTwo, 5, 1, "department", "department", "1-2"
+    AssertOutputTwoRow wsOutputTwo, 6, 1, "company2", "company two", "1-3"
     wsTableList.Range("A2:C200").ClearContents
 End Sub
 

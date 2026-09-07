@@ -3959,23 +3959,12 @@ public static class OutputSheetPlanBuilder
 
         if (CurrentDisplayAliases.Value?.ShouldPreservePhysicalTableId(table) == true)
         {
-            var physicalName = ResolveTableName(
+            return ResolveTableName(
                 table.SchemaObject.BaseIdentifier.Value,
                 mappings);
-            if (physicalName != MissingName)
-            {
-                return physicalName;
-            }
         }
 
-        var sourceName = ResolveTableName(table, mappings);
-        if (sourceName != MissingName ||
-            CurrentDisplayAliases.Value?.ShouldPreservePhysicalTableId(table) != true)
-        {
-            return sourceName;
-        }
-
-        return ResolveTableName(table.SchemaObject.BaseIdentifier.Value, mappings);
+        return ResolveTableName(table, mappings);
     }
 
     /// <summary>

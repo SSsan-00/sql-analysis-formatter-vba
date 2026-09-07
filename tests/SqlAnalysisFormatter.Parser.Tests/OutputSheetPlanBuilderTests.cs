@@ -2070,6 +2070,34 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
+    /// UNIONで衝突する元別名の和名を、物理名未取得の別テーブルへ流用しない
+    /// </summary>
+    [TestMethod]
+    public void Build_DoesNotReuseCollidingAliasNameForAnotherPhysicalTable()
+    {
+        const string sql = "SELECT tb1.id FROM company1 AS tb1 " +
+            "JOIN department AS tb2 ON tb1.department_id = tb2.id " +
+            "UNION SELECT tb1.id FROM company2 AS tb1 " +
+            "JOIN department AS tb2 ON tb1.department_id = tb2.id";
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "会社2", "id", "ID"),
+            new("department", "部署", "id", "ID"),
+            new("company2", "会社2", "id", "ID")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(
+            "参照テーブル: (和名未取得)[company1][tb1]、部署[tb2]、会社2[tb3]",
+            CellValue(plan, 2, 1));
+        Assert.IsTrue(plan.TableNameReferences.Any(reference =>
+            reference.PhysicalTableId == "company1" &&
+            reference.ReplacementSuffix == "[tb1]"));
+    }
+
+    /// <summary>
     /// UNION分岐内のCROSS JOINも参照テーブルと別名採番へ含める
     /// </summary>
     [TestMethod]
@@ -2158,8 +2186,11 @@ public sealed class OutputSheetPlanBuilderTests
 
         Assert.IsFalse(plan.IsFallback);
         Assert.AreEqual(
-            "参照テーブル: 都市1[tb1]、都市2[tb2]",
+            "参照テーブル: (和名未取得)[city1][tb1]、都市2[tb2]",
             CellValue(plan, 2, 1));
+        Assert.IsTrue(plan.TableNameReferences.Any(reference =>
+            reference.PhysicalTableId == "city1" &&
+            reference.ReplacementSuffix == "[tb1]"));
         Assert.AreEqual("tb1.全項目", CellValue(plan, 3, 17));
         Assert.AreEqual("tb2.全項目", CellValue(plan, 5, 17));
         CollectionAssert.AreEqual(
