@@ -1418,10 +1418,14 @@ public static class OutputSheetPlanBuilder
         IReadOnlyList<MappingDefinition> mappings,
         IEnumerable<string> additionalTables)
     {
-        var targetDisplay = BuildTargetTableDisplay(target, mappings, includeIdentifier: true);
+        var targetBinding = PhysicalTableUsageCollector.FindTargetBinding(target, fromClause);
+        var targetDisplay = BuildTargetTableDisplay(
+            targetBinding is NamedTableReference namedBinding ? namedBinding : target,
+            mappings,
+            includeIdentifier: true);
         return BuildTransferTableReferences(
             targetDisplay,
-            BuildTableDisplays(fromClause, mappings, additionalTables));
+            BuildTableDisplays(fromClause, mappings, additionalTables, targetBinding));
     }
 
     /// <summary>
@@ -3836,7 +3840,8 @@ public static class OutputSheetPlanBuilder
     private static IReadOnlyList<string> BuildTableDisplays(
         FromClause? fromClause,
         IReadOnlyList<MappingDefinition> mappings,
-        IEnumerable<string> additionalTables)
+        IEnumerable<string> additionalTables,
+        TableReference? excludedTable = null)
     {
         var allowStandaloneTableName = fromClause?.TableReferences
             .SelectMany(EnumerateNamedTables)
@@ -3846,7 +3851,8 @@ public static class OutputSheetPlanBuilder
             .SelectMany(table => EnumerateTableDisplays(
                 table,
                 mappings,
-                allowStandaloneTableName))
+                allowStandaloneTableName,
+                excludedTable))
             ?? [])
             .Concat(additionalTables)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -3859,8 +3865,14 @@ public static class OutputSheetPlanBuilder
     private static IEnumerable<string> EnumerateTableDisplays(
         TableReference table,
         IReadOnlyList<MappingDefinition> mappings,
-        bool allowStandaloneTableName)
+        bool allowStandaloneTableName,
+        TableReference? excludedTable = null)
     {
+        if (ReferenceEquals(table, excludedTable))
+        {
+            yield break;
+        }
+
         switch (table)
         {
             case NamedTableReference named:
@@ -3872,7 +3884,8 @@ public static class OutputSheetPlanBuilder
                     foreach (var display in EnumerateTableDisplays(
                         child,
                         mappings,
-                        allowStandaloneTableName))
+                        allowStandaloneTableName,
+                        excludedTable))
                     {
                         yield return display;
                     }
@@ -3882,7 +3895,8 @@ public static class OutputSheetPlanBuilder
                 foreach (var display in EnumerateTableDisplays(
                     parenthesized.Join,
                     mappings,
-                    allowStandaloneTableName))
+                    allowStandaloneTableName,
+                    excludedTable))
                 {
                     yield return display;
                 }

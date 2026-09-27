@@ -47,8 +47,17 @@ internal static class PhysicalTableUsageCollector
         };
         var outputIntoTarget = specification?.OutputIntoClause?.IntoTable;
         var targetBinding = FindTargetBinding(statement, target);
+        var resolvedTarget = ResolveTarget(statement, target, cteDefinitions);
 
-        // 更新対象そのものと、UPDATE/DELETEのFROM句で対象別名を束縛する出現は出力専用とする。
+        // UPDATE/DELETEで更新対象の列をSET/WHERE/ON/OUTPUTなどから読む場合は、
+        // 同じ物理表を入力と出力の両方へ載せる。
+        if (statement is UpdateStatement or DeleteStatement &&
+            ReadsModificationTarget(statement, target, targetBinding, resolvedTarget))
+        {
+            inputs.Add(resolvedTarget);
+        }
+
+        // 更新対象そのものと、UPDATE/DELETEのFROM句で対象別名を束縛する出現は重複収集しない。
         // 自己結合やサブクエリなど、同じ物理表の独立した出現は除外せず入力へ残す。
         var suppressInputs = statement is InsertStatement valuesInsertStatement &&
             valuesInsertStatement.InsertSpecification.InsertSource is ValuesInsertSource;
@@ -64,7 +73,6 @@ internal static class PhysicalTableUsageCollector
             }
         }
 
-        var resolvedTarget = ResolveTarget(statement, target, cteDefinitions);
         switch (statement)
         {
             case SelectStatement select when select.Into is not null:
@@ -79,6 +87,153 @@ internal static class PhysicalTableUsageCollector
         if (outputIntoTarget is not null)
         {
             outputs.Add(ResolveTableReference(outputIntoTarget, cteDefinitions));
+        }
+    }
+
+    private static bool ReadsModificationTarget(
+        TSqlStatement statement,
+        TableReference? target,
+        TableReference? targetBinding,
+        string resolvedTarget)
+    {
+        var targetNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AddTargetNames(targetNames, target);
+        AddTargetNames(targetNames, targetBinding);
+        if (resolvedTarget.Length > 0)
+        {
+            targetNames.Add(resolvedTarget);
+        }
+
+        var assignmentTargets = statement is UpdateStatement update
+            ? update.UpdateSpecification.SetClauses
+                .OfType<AssignmentSetClause>()
+                .Where(clause => clause.AssignmentKind == AssignmentKind.Equals)
+                .Where(clause => clause.Column is not null)
+                .Select(clause => clause.Column)
+                .ToHashSet()
+            : [];
+        var queryScopes = QueryScopeCollector.Collect(statement);
+
+        foreach (var column in ColumnReferenceCollector.Collect(statement))
+        {
+            if (assignmentTargets.Contains(column))
+            {
+                continue;
+            }
+
+            var identifiers = column.MultiPartIdentifier?.Identifiers;
+            if (identifiers is not { Count: > 0 })
+            {
+                continue;
+            }
+
+            if (identifiers.Count > 1)
+            {
+                var qualifier = identifiers[^2].Value;
+                var isTargetQualifier = targetNames.Contains(qualifier) ||
+                    qualifier.Equals("inserted", StringComparison.OrdinalIgnoreCase) ||
+                    qualifier.Equals("deleted", StringComparison.OrdinalIgnoreCase);
+                if (isTargetQualifier &&
+                    !queryScopes.Any(scope => scope.Contains(column.StartOffset) &&
+                        scope.TableQualifiers.Contains(qualifier)) &&
+                    !IsBoundToOtherModificationSource(statement, qualifier, targetBinding))
+                {
+                    return true;
+                }
+                continue;
+            }
+
+            // 無修飾列は、FROMがないか対象テーブルだけの場合に限り更新対象列として扱う。
+            if (!queryScopes.Any(scope => scope.Contains(column.StartOffset)) &&
+                HasOnlyTargetSource(statement, targetBinding))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsBoundToOtherModificationSource(
+        TSqlStatement statement,
+        string qualifier,
+        TableReference? targetBinding)
+    {
+        var sources = GetModificationFromClause(statement)?.TableReferences
+            .SelectMany(EnumerateSourceTables)
+            ?? [];
+        var foundSource = false;
+        foreach (var source in sources)
+        {
+            var sourceQualifier = source is TableReferenceWithAlias { Alias: not null } aliased
+                ? aliased.Alias.Value
+                : source is NamedTableReference named ? PhysicalId(named) : string.Empty;
+            if (!sourceQualifier.Equals(qualifier, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            foundSource = true;
+            if (ReferenceEquals(source, targetBinding))
+            {
+                return false;
+            }
+        }
+
+        return foundSource;
+    }
+
+    private static bool HasOnlyTargetSource(TSqlStatement statement, TableReference? targetBinding)
+    {
+        var fromClause = GetModificationFromClause(statement);
+        if (fromClause is null)
+        {
+            return true;
+        }
+
+        // ponytail: without column metadata, multi-source unqualified names stay ambiguous; add catalog-aware resolution if exact ownership is needed.
+        var sources = fromClause.TableReferences
+            .SelectMany(EnumerateSourceTables)
+            .Take(2)
+            .ToArray();
+        return sources.Length == 1 && ReferenceEquals(sources[0], targetBinding);
+    }
+
+    private static IEnumerable<TableReference> EnumerateSourceTables(TableReference table)
+    {
+        switch (table)
+        {
+            case JoinTableReference join:
+                foreach (var source in EnumerateSourceTables(join.FirstTableReference))
+                {
+                    yield return source;
+                }
+                foreach (var source in EnumerateSourceTables(join.SecondTableReference))
+                {
+                    yield return source;
+                }
+                break;
+            case JoinParenthesisTableReference parenthesized:
+                foreach (var source in EnumerateSourceTables(parenthesized.Join))
+                {
+                    yield return source;
+                }
+                break;
+            default:
+                yield return table;
+                break;
+        }
+    }
+
+    private static void AddTargetNames(ISet<string> targetNames, TableReference? tableReference)
+    {
+        if (tableReference is NamedTableReference named)
+        {
+            targetNames.Add(PhysicalId(named));
+        }
+        if (tableReference is TableReferenceWithAlias aliased && aliased.Alias is not null)
+        {
+            targetNames.Add(aliased.Alias.Value);
         }
     }
 
@@ -98,15 +253,79 @@ internal static class PhysicalTableUsageCollector
         TSqlStatement statement,
         TableReference? target)
     {
-        if (target is not NamedTableReference namedTarget ||
-            namedTarget.SchemaObject.Identifiers.Count != 1)
+        return FindTargetBinding(target, GetModificationFromClause(statement));
+    }
+
+    internal static TableReference? FindTargetBinding(
+        TableReference? target,
+        FromClause? fromClause)
+    {
+        if (target is not NamedTableReference namedTarget)
         {
             return null;
         }
 
-        return FindTableReferenceByAlias(
-            GetModificationFromClause(statement)?.TableReferences,
-            PhysicalId(namedTarget));
+        var targetId = PhysicalId(namedTarget);
+        if (namedTarget.SchemaObject.Identifiers.Count == 1)
+        {
+            var aliasMatch = FindTableReferenceByAlias(fromClause?.TableReferences, targetId);
+            if (aliasMatch is not null)
+            {
+                return aliasMatch;
+            }
+        }
+
+        var physicalMatches = FindTableReferencesByPhysicalId(fromClause?.TableReferences, targetId)
+            .Take(2)
+            .ToArray();
+        return physicalMatches.Length == 1 ? physicalMatches[0] : null;
+    }
+
+    private static IEnumerable<NamedTableReference> FindTableReferencesByPhysicalId(
+        IEnumerable<TableReference>? tableReferences,
+        string physicalId)
+    {
+        if (tableReferences is null)
+        {
+            yield break;
+        }
+
+        foreach (var tableReference in tableReferences)
+        {
+            foreach (var match in FindTableReferencesByPhysicalId(tableReference, physicalId))
+            {
+                yield return match;
+            }
+        }
+    }
+
+    private static IEnumerable<NamedTableReference> FindTableReferencesByPhysicalId(
+        TableReference tableReference,
+        string physicalId)
+    {
+        switch (tableReference)
+        {
+            case NamedTableReference named when string.Equals(
+                PhysicalId(named), physicalId, StringComparison.OrdinalIgnoreCase):
+                yield return named;
+                break;
+            case JoinTableReference join:
+                foreach (var match in FindTableReferencesByPhysicalId(join.FirstTableReference, physicalId))
+                {
+                    yield return match;
+                }
+                foreach (var match in FindTableReferencesByPhysicalId(join.SecondTableReference, physicalId))
+                {
+                    yield return match;
+                }
+                break;
+            case JoinParenthesisTableReference parenthesized:
+                foreach (var match in FindTableReferencesByPhysicalId(parenthesized.Join, physicalId))
+                {
+                    yield return match;
+                }
+                break;
+        }
     }
 
     private static FromClause? GetModificationFromClause(TSqlStatement statement)
@@ -166,9 +385,9 @@ internal static class PhysicalTableUsageCollector
             return ResolveUniquePhysicalTable(cte.QueryExpression, cteDefinitions);
         }
 
-        var aliasMatch = FindTableReferenceByAlias(
-            GetModificationFromClause(statement)?.TableReferences,
-            targetId);
+        var aliasMatch = FindTargetBinding(
+            namedTarget,
+            GetModificationFromClause(statement));
         if (aliasMatch is not null)
         {
             return ResolveTableReference(aliasMatch, cteDefinitions);
@@ -352,6 +571,66 @@ internal static class PhysicalTableUsageCollector
             tables.Add(node);
             base.ExplicitVisit(node);
         }
+    }
+
+    private sealed class ColumnReferenceCollector : TSqlFragmentVisitor
+    {
+        private readonly List<ColumnReferenceExpression> columns = [];
+
+        public static IReadOnlyList<ColumnReferenceExpression> Collect(TSqlFragment fragment)
+        {
+            var visitor = new ColumnReferenceCollector();
+            fragment.Accept(visitor);
+            return visitor.columns;
+        }
+
+        public override void ExplicitVisit(ColumnReferenceExpression node)
+        {
+            columns.Add(node);
+            base.ExplicitVisit(node);
+        }
+    }
+
+    private sealed class QueryScopeCollector : TSqlFragmentVisitor
+    {
+        private readonly List<QueryScope> scopes = [];
+
+        public static IReadOnlyList<QueryScope> Collect(TSqlFragment fragment)
+        {
+            var visitor = new QueryScopeCollector();
+            fragment.Accept(visitor);
+            return visitor.scopes;
+        }
+
+        public override void ExplicitVisit(QuerySpecification node)
+        {
+            var qualifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (node.FromClause is not null)
+            {
+                foreach (var table in node.FromClause.TableReferences.SelectMany(EnumerateSourceTables))
+                {
+                    if (table is TableReferenceWithAlias { Alias: not null } aliased)
+                    {
+                        qualifiers.Add(aliased.Alias.Value);
+                    }
+                    else if (table is NamedTableReference named)
+                    {
+                        qualifiers.Add(PhysicalId(named));
+                    }
+                }
+            }
+
+            scopes.Add(new QueryScope(
+                node.StartOffset,
+                node.StartOffset + node.FragmentLength,
+                qualifiers));
+            base.ExplicitVisit(node);
+        }
+    }
+
+    private sealed record QueryScope(int StartOffset, int EndOffset, HashSet<string> TableQualifiers)
+    {
+        public bool Contains(int offset) => offset >= StartOffset && offset < EndOffset;
     }
 
     private sealed class OrderedTableIds

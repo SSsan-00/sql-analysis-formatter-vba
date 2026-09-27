@@ -120,17 +120,17 @@ public sealed class TableUsageTests
         var deletePlan = OutputSheetPlanBuilder.Build(deleteSql, []);
 
         CollectionAssert.AreEqual(
-            new[] { "locations" },
+            new[] { "users", "locations" },
             updatePlan.InputTableIds.ToArray());
         CollectionAssert.AreEqual(new[] { "users" }, updatePlan.OutputTableIds.ToArray());
         CollectionAssert.AreEqual(
-            new[] { "suspended_users" },
+            new[] { "users", "suspended_users" },
             deletePlan.InputTableIds.ToArray());
         CollectionAssert.AreEqual(new[] { "users" }, deletePlan.OutputTableIds.ToArray());
     }
 
     [TestMethod]
-    public void Build_Update_DoesNotTreatTargetColumnsAsInputTables()
+    public void Build_Update_AddsTargetOnlyWhenTargetColumnsAreRead()
     {
         const string constantSql = "UPDATE dbo.users SET name = 'fixed';";
         const string targetValueSql = "UPDATE dbo.users SET name = name + '!';";
@@ -145,7 +145,7 @@ public sealed class TableUsageTests
 
         Assert.IsEmpty(constantPlan.InputTableIds);
         CollectionAssert.AreEqual(new[] { "users" }, constantPlan.OutputTableIds.ToArray());
-        Assert.IsEmpty(targetValuePlan.InputTableIds);
+        CollectionAssert.AreEqual(new[] { "users" }, targetValuePlan.InputTableIds.ToArray());
         CollectionAssert.AreEqual(new[] { "users" }, targetValuePlan.OutputTableIds.ToArray());
         CollectionAssert.AreEqual(new[] { "defaults" }, otherTableValuePlan.InputTableIds.ToArray());
         CollectionAssert.AreEqual(new[] { "users" }, otherTableValuePlan.OutputTableIds.ToArray());
@@ -169,13 +169,97 @@ public sealed class TableUsageTests
         var targetLastPlan = OutputSheetPlanBuilder.Build(targetLastSql, []);
 
         CollectionAssert.AreEqual(
-            new[] { "defaults" },
+            new[] { "users", "defaults" },
             targetFirstPlan.InputTableIds.ToArray());
         CollectionAssert.AreEqual(new[] { "users" }, targetFirstPlan.OutputTableIds.ToArray());
         CollectionAssert.AreEqual(
-            new[] { "defaults" },
+            new[] { "users", "defaults" },
             targetLastPlan.InputTableIds.ToArray());
         CollectionAssert.AreEqual(new[] { "users" }, targetLastPlan.OutputTableIds.ToArray());
+    }
+
+    [TestMethod]
+    public void Build_UpdateWhereSubquery_AddsReadTargetAndSubquerySourceAsInputs()
+    {
+        const string sql = """
+            UPDATE dbo.A
+            SET x = 'alpha'
+            WHERE y IN (
+                SELECT beta
+                FROM dbo.B
+                WHERE z = 'gamma'
+            );
+            """;
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        CollectionAssert.AreEqual(new[] { "A", "B" }, plan.InputTableIds.ToArray());
+        CollectionAssert.AreEqual(new[] { "A" }, plan.OutputTableIds.ToArray());
+    }
+
+    [TestMethod]
+    public void Build_UpdatePhysicalTargetWithSingleFromAlias_DoesNotAddTargetAsInput()
+    {
+        const string sql = "UPDATE dbo.users SET name = 'x' FROM dbo.users AS u";
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsEmpty(plan.InputTableIds);
+        CollectionAssert.AreEqual(new[] { "users" }, plan.OutputTableIds.ToArray());
+    }
+
+    [TestMethod]
+    public void Build_UpdateCompoundAssignment_AddsTargetAsInput()
+    {
+        const string sql = "UPDATE dbo.users SET count += 1";
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        CollectionAssert.AreEqual(new[] { "users" }, plan.InputTableIds.ToArray());
+        CollectionAssert.AreEqual(new[] { "users" }, plan.OutputTableIds.ToArray());
+    }
+
+    [TestMethod]
+    public void Build_UpdateTargetReadDetectionHonorsQueryScopeAndFromSources()
+    {
+        const string shadowedAliasSql = """
+            UPDATE dbo.A
+            SET x = 'fixed'
+            WHERE EXISTS (SELECT 1 FROM dbo.B AS A WHERE A.id > 0);
+            """;
+        const string correlatedTargetSql = """
+            UPDATE dbo.A
+            SET x = 'fixed'
+            WHERE EXISTS (SELECT 1 FROM dbo.B AS b WHERE b.id = dbo.A.id);
+            """;
+        const string correlatedFromAliasSql = """
+            UPDATE dbo.A
+            SET x = 'fixed'
+            FROM dbo.B AS A
+            WHERE EXISTS (SELECT 1 FROM dbo.C AS c WHERE c.id = A.id);
+            """;
+        const string targetOnlySql = "UPDATE dbo.A SET x = x + 1";
+        const string targetBindingSql = "UPDATE a SET x = x + 1 FROM dbo.A AS a";
+        const string ambiguousFromSql = """
+            UPDATE dbo.A
+            SET x = x + 1
+            FROM dbo.B AS b
+            JOIN dbo.C AS c ON c.id = b.id;
+            """;
+
+        var shadowedAliasPlan = OutputSheetPlanBuilder.Build(shadowedAliasSql, []);
+        var correlatedTargetPlan = OutputSheetPlanBuilder.Build(correlatedTargetSql, []);
+        var correlatedFromAliasPlan = OutputSheetPlanBuilder.Build(correlatedFromAliasSql, []);
+        var targetOnlyPlan = OutputSheetPlanBuilder.Build(targetOnlySql, []);
+        var targetBindingPlan = OutputSheetPlanBuilder.Build(targetBindingSql, []);
+        var ambiguousFromPlan = OutputSheetPlanBuilder.Build(ambiguousFromSql, []);
+
+        CollectionAssert.AreEqual(new[] { "B" }, shadowedAliasPlan.InputTableIds.ToArray());
+        CollectionAssert.AreEqual(new[] { "A", "B" }, correlatedTargetPlan.InputTableIds.ToArray());
+        CollectionAssert.AreEqual(new[] { "B", "C" }, correlatedFromAliasPlan.InputTableIds.ToArray());
+        CollectionAssert.AreEqual(new[] { "A" }, targetOnlyPlan.InputTableIds.ToArray());
+        CollectionAssert.AreEqual(new[] { "A" }, targetBindingPlan.InputTableIds.ToArray());
+        CollectionAssert.AreEqual(new[] { "B", "C" }, ambiguousFromPlan.InputTableIds.ToArray());
     }
 
     [TestMethod]
@@ -236,11 +320,11 @@ public sealed class TableUsageTests
         CollectionAssert.AreEqual(
             new[] { "users", "audit_log" },
             insertPlan.OutputTableIds.ToArray());
-        Assert.IsEmpty(updatePlan.InputTableIds);
+        CollectionAssert.AreEqual(new[] { "users" }, updatePlan.InputTableIds.ToArray());
         CollectionAssert.AreEqual(
             new[] { "users", "audit_log" },
             updatePlan.OutputTableIds.ToArray());
-        Assert.IsEmpty(deletePlan.InputTableIds);
+        CollectionAssert.AreEqual(new[] { "users" }, deletePlan.InputTableIds.ToArray());
         CollectionAssert.AreEqual(
             new[] { "users", "audit_log" },
             deletePlan.OutputTableIds.ToArray());

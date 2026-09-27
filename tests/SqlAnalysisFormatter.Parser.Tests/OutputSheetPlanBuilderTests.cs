@@ -3808,6 +3808,140 @@ public sealed class OutputSheetPlanBuilderTests
     }
 
     /// <summary>
+    /// UPDATE/DELETE対象の別名をFROM句の実テーブルへ解決し、対象を一度だけ表示することを確認
+    /// </summary>
+    [TestMethod]
+    [DataRow(
+        "UPDATE u SET name = 'x' FROM dbo.users AS u",
+        "UPDATE")]
+    [DataRow(
+        "DELETE u FROM dbo.users AS u",
+        "DELETE")]
+    public void Build_ResolvesModificationTargetAliasAndOmitsItsFromBinding(
+        string sql,
+        string statementKind)
+    {
+        MappingDefinition[] mappings = [new("users", "ユーザー", "", "")];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(
+            "参照テーブル: ユーザー[u]",
+            CellValue(plan, 2, 1),
+            statementKind);
+        Assert.IsFalse(plan.TableNameReferences?.Any(reference =>
+            reference.PhysicalTableId.Equals("u", StringComparison.OrdinalIgnoreCase)) ?? false);
+    }
+
+    /// <summary>
+    /// 和名未定義の更新対象別名にもFROM句の物理テーブルIDを保持することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_UpdateTargetAliasKeepsPhysicalIdWhenTableNameIsMissing()
+    {
+        const string sql = "UPDATE u SET name = 'x' FROM dbo.users AS u";
+
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("参照テーブル: (和名未取得)[users]", CellValue(plan, 2, 1));
+        Assert.IsTrue(plan.TableNameReferences?.Any(reference =>
+            reference.PhysicalTableId == "users") ?? false);
+        Assert.IsFalse(plan.TableNameReferences?.Any(reference =>
+            reference.PhysicalTableId == "u") ?? false);
+    }
+
+    /// <summary>
+    /// 自己結合では更新対象の別名だけを除外し、同一物理テーブルの別名を残すことを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_UpdateTargetAliasKeepsOtherSelfJoinAlias()
+    {
+        const string sql = """
+            UPDATE u1
+            SET name = u2.name
+            FROM dbo.users AS u1
+            INNER JOIN dbo.users AS u2 ON u2.id = u1.manager_id
+            """;
+        MappingDefinition[] mappings = [new("users", "ユーザー", "", "")];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(
+            "参照テーブル: ユーザー[u1]、ユーザー[u2]",
+            CellValue(plan, 2, 1));
+    }
+
+    /// <summary>
+    /// 対象エイリアスを含む括弧付きJOINでも、他のFROMテーブルを残すことを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_UpdateTargetAliasInsideParenthesizedJoinKeepsOtherTables()
+    {
+        const string sql = """
+            UPDATE u
+            SET name = o.name
+            FROM (dbo.users AS u INNER JOIN dbo.orders AS o ON o.user_id = u.id)
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("users", "ユーザー", "", ""),
+            new("orders", "注文", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(
+            "参照テーブル: ユーザー[u]、注文[o]",
+            CellValue(plan, 2, 1));
+    }
+
+    /// <summary>
+    /// FROM句に更新対象テーブルが1回だけ別名付きで現れる場合、同一対象として一度だけ表示することを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_UpdatePhysicalTargetWithSingleFromAliasDisplaysOnce()
+    {
+        const string sql = """
+            UPDATE dbo.users
+            SET name = 'x'
+            FROM dbo.users AS u
+            """;
+        MappingDefinition[] mappings = [new("users", "ユーザー", "", "")];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(
+            "参照テーブル: ユーザー[u]",
+            CellValue(plan, 2, 1));
+    }
+
+    /// <summary>
+    /// 派生テーブルを更新対象にしたときも対象識別子を表示することを確認
+    /// </summary>
+    [TestMethod]
+    [DataRow(
+        "UPDATE target_user SET name = 'x' FROM (SELECT id, name FROM dbo.users) AS target_user",
+        "UPDATE")]
+    [DataRow(
+        "DELETE target_user FROM (SELECT id FROM dbo.users) AS target_user",
+        "DELETE")]
+    public void Build_DerivedModificationTargetKeepsTargetIdentifier(string sql, string statementKind)
+    {
+        var plan = OutputSheetPlanBuilder.Build(sql, []);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.IsTrue(
+            plan.Cells.Any(cell => cell.Column == 1 &&
+                cell.Value.Contains("(和名未取得)[target_user]", StringComparison.Ordinal)),
+            statementKind);
+    }
+
+    /// <summary>
     /// DELETEの検索条件に含まれる深いネストCASEにも共通の論理階層配置を適用することを確認
     /// </summary>
     [TestMethod]
@@ -4441,6 +4575,84 @@ public sealed class OutputSheetPlanBuilderTests
             (9, 37, "'ARCHIVED'"),
             (10, 1, "検索条件"),
             (10, 17, "tb1.user_id IN (SQ1)"));
+    }
+
+    /// <summary>
+    /// UPDATEの非相関サブクエリへ更新対象テーブルが混入せず、相関時だけ参照表示されることを確認
+    /// </summary>
+    [TestMethod]
+    [DataRow(
+        "UPDATE A SET x = 'alpha' WHERE y IN (SELECT b.beta FROM B AS b WHERE b.z = 'gamma')",
+        "参照テーブル: 参照B[b]")]
+    [DataRow(
+        "UPDATE A SET x = 'alpha' WHERE EXISTS (SELECT 1 FROM B AS b WHERE b.z = 'gamma')",
+        "参照テーブル: 参照B[b]")]
+    [DataRow(
+        "UPDATE A SET x = 'alpha' WHERE y > (SELECT MAX(b.beta) FROM B AS b)",
+        "参照テーブル: 参照B[b]")]
+    [DataRow(
+        "UPDATE A SET x = 'alpha' WHERE EXISTS (SELECT 1 FROM B AS b WHERE b.id = A.id)",
+        "参照テーブル: 更新対象[A]、参照B[b]")]
+    [DataRow(
+        "UPDATE A SET x = 'alpha' WHERE y IN (SELECT b.beta FROM B AS b WHERE b.id = A.id)",
+        "参照テーブル: 更新対象[A]、参照B[b]")]
+    [DataRow(
+        "UPDATE a SET x = 'alpha' FROM A AS a WHERE a.y IN (SELECT b.beta FROM B AS b WHERE b.z = 'gamma')",
+        "参照テーブル: 参照B[b]")]
+    [DataRow(
+        "UPDATE a SET x = 'alpha' FROM A AS a WHERE a.y IN (SELECT b.beta FROM B AS b WHERE b.id = a.id)",
+        "参照テーブル: 更新対象[a]、参照B[b]")]
+    public void Build_UpdateSubqueryReferencesTargetOnlyWhenCorrelated(
+        string sql,
+        string expectedSubqueryReferences)
+    {
+        MappingDefinition[] mappings =
+        [
+            new("A", "更新対象", "", ""),
+            new("a", "更新対象", "", ""),
+            new("b", "参照B", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("サブクエリ[SQ1]", CellValue(plan, 1, 1));
+        Assert.AreEqual(expectedSubqueryReferences, CellValue(plan, 2, 1));
+    }
+
+    /// <summary>
+    /// ネストした非相関サブクエリにも更新対象テーブルが混入しないことを確認
+    /// </summary>
+    [TestMethod]
+    public void Build_NestedUpdateSubqueriesDoNotInheritTargetTable()
+    {
+        const string sql = """
+            UPDATE A
+            SET x = 'alpha'
+            WHERE y IN (
+                SELECT b.beta
+                FROM B AS b
+                WHERE b.c_id IN (
+                    SELECT c.id
+                    FROM C AS c
+                    WHERE c.flag = 1
+                )
+            )
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("A", "更新対象", "", ""),
+            new("b", "参照B", "", ""),
+            new("c", "参照C", "", "")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual("サブクエリ[SQ1]", CellValue(plan, 1, 1));
+        Assert.AreEqual("参照テーブル: 参照C[c]", CellValue(plan, 2, 1));
+        Assert.AreEqual("サブクエリ[SQ2]", CellValue(plan, 6, 1));
+        Assert.AreEqual("参照テーブル: 参照B[b]、SQ1", CellValue(plan, 7, 1));
     }
 
     /// <summary>
