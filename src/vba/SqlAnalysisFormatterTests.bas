@@ -1116,11 +1116,13 @@ Public Sub OutputMode_PreviewsRendersAndSurvivesClear()
         If wsSql.Shapes("outputModePreview").TextFrame.Characters.Font.Color <> IIf(mode = 2, vbWhite, vbBlack) Then Fail "Preview font mismatch."
         ClearData False
         SetupWorkbook
+        AssertOutputTwoModeColors expectedColor, IIf(mode = 2, vbWhite, vbBlack)
         If wsSql.OptionButtons("optOutputMode" & mode).Value <> xlOn Then Fail "Output mode was reset."
         If wsSql.OptionButtons("optOutputMode" & (3 - mode)).Value <> xlOff Then Fail "Output modes are not mutually exclusive."
         If ExternalParserConfigured() Then
             wsSql.Range("A2").Value = "INSERT INTO users (user_id) SELECT user_id FROM source_users WHERE user_id > 0"
             AnalyzeQueries False
+            AssertOutputTwoModeColors expectedColor, IIf(mode = 2, vbWhite, vbBlack)
             found = False
             For Each cell In wsOutput.UsedRange.Cells
                 If cell.Interior.Color = expectedColor Then
@@ -1131,6 +1133,18 @@ Public Sub OutputMode_PreviewsRendersAndSurvivesClear()
             If Not found Then Fail "Output header fill missing."
         End If
     Next mode
+End Sub
+
+' Both input and output headers use the selected mode, including empty output.
+Private Sub AssertOutputTwoModeColors(ByVal fillColor As Long, ByVal fontColor As Long)
+    Dim cell As Range
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Worksheets(OutputSheetTwoName())
+    For Each cell In Union(ws.Range("A3:AV3"), ws.Range("BA3:CV3")).Cells
+        If cell.Interior.Color <> fillColor Then Fail "Output two header fill mismatch."
+        If cell.Font.Color <> fontColor Then Fail "Output two header font mismatch."
+        If cell.Font.Bold Then Fail "Output two header must not be bold."
+    Next cell
 End Sub
 
 '@TestMethod("AnalyzeQueries")

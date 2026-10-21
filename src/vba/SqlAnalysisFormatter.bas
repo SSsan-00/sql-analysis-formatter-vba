@@ -41,11 +41,11 @@ Public Sub SetupWorkbook()
     MoveWorksheetToIndex wsTableList, 5
 
     RestoreHeaders wsRef, wsSql
+    EnsureSqlActionButtons wsSql
     ApplyMissingNameConditionalFormatting wsRef
     ApplyOutputSheetLayout wsOutput
     EnsureOutputTwoStructure wsOutputTwo
     ApplyTableListLayout wsTableList
-    EnsureSqlActionButtons wsSql
     InstallOutputButton wsOutput, "btnCopyOutput", "CopyOutput", OUTPUT_LAST_COLUMN
     InstallOutputButton wsOutputTwo, "btnCopyOutputTwo", "CopyOutputTwo", OUTPUT_TWO_LAST_COLUMN
 End Sub
@@ -306,6 +306,7 @@ Public Sub ClearData(Optional ByVal showMessage As Boolean = True)
     Set wsOutputTwo = GetOutputTwoSheet(False)
     Set wsTableList = GetTableListSheet()
 
+    EnsureSqlActionButtons wsSql
     ClearRowsBelowHeader wsRef, COL_FIELD_NAME
     ClearRowsBelowHeader wsSql, COL_REPLACEMENT
     ClearOutputSheet wsOutput
@@ -968,6 +969,8 @@ Private Sub ApplyOutputTwoSheetLayout( _
     ApplyOutputSheetDimensions _
         ws, lastRow, OUTPUT_TWO_LAST_COLUMN, True, resetEntireColumns
     ApplyOutputTwoHeaderFontWeight ws
+    ApplyOutputHeaderColor ws.Range(ws.Cells(3, 1), ws.Cells(3, 48))
+    ApplyOutputHeaderColor ws.Range(ws.Cells(3, 53), ws.Cells(3, OUTPUT_TWO_LAST_COLUMN))
     ApplyOutputSheetView ws
 End Sub
 
@@ -2215,7 +2218,6 @@ Private Sub ApplyOutputTwoBlockStyle( _
     nameRange.VerticalAlignment = xlCenter
     numberRange.VerticalAlignment = xlCenter
 
-    ws.Range(ws.Cells(3, startColumn), ws.Cells(3, startColumn + 47)).Interior.Color = OUTPUT_FILL_COLOR
     ws.Range(ws.Cells(3, startColumn), ws.Cells(3, startColumn + 47)).Font.Bold = False
     ApplyBottomBorder ws.Range(ws.Cells(3, startColumn), ws.Cells(3, startColumn + 1))
     ApplyBottomBorder ws.Range(ws.Cells(3, startColumn + 2), ws.Cells(3, startColumn + 17))
