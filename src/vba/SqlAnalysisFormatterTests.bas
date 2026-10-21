@@ -16,6 +16,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     SetupWorkbook_CreatesOutputSheet
     SetupWorkbook_CreatesOutputTwoLayout
     SetupWorkbook_CreatesStableSqlActionButtons
+    OutputMode_PreviewsRendersAndSurvivesClear
     SetupWorkbook_ProvidesToastForm
     SetupWorkbook_TracksMissingNameFillColor
     CompletionToast_UsesTwoSecondDuration
@@ -1090,6 +1091,46 @@ Public Sub AnalyzeQueries_SortsOutputTwoByCompositeTableNumber()
     AssertOutputTwoRow wsOutput, 6, 53, "output_early", "output early", "2-10"
     AssertOutputTwoRow wsOutput, 7, 53, "output_late", "output late", "10-2"
     wsTableList.Range("A2:C200").ClearContents
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' 配色の切替とクリア後の選択保持を確認
+Public Sub OutputMode_PreviewsRendersAndSurvivesClear()
+    Dim wsSql As Worksheet
+    Dim wsOutput As Worksheet
+    Dim mode As Long
+    Dim expectedColor As Long
+    Dim cell As Range
+    Dim found As Boolean
+    SetupWorkbook
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+    For mode = 2 To 1 Step -1
+        If InStr(wsSql.OptionButtons("optOutputMode" & mode).Caption, "(") > 0 Then Fail "Mode caption contains extra text."
+        If wsSql.Shapes("outputModeBackground").Fill.ForeColor.RGB <> RGB(242, 242, 242) Then Fail "Mode panel fill mismatch."
+        If wsSql.Shapes("outputModeBackground").ZOrderPosition >= wsSql.Shapes("optOutputMode" & mode).ZOrderPosition Then Fail "Mode background covers radio button."
+        wsSql.OptionButtons("optOutputMode" & mode).Value = xlOn
+        UpdateOutputModePreview
+        expectedColor = IIf(mode = 2, RGB(0, 0, 255), OUTPUT_FILL_COLOR)
+        If wsSql.Shapes("outputModePreview").Fill.ForeColor.RGB <> expectedColor Then Fail "Preview fill mismatch."
+        If wsSql.Shapes("outputModePreview").TextFrame.Characters.Font.Color <> IIf(mode = 2, vbWhite, vbBlack) Then Fail "Preview font mismatch."
+        ClearData False
+        SetupWorkbook
+        If wsSql.OptionButtons("optOutputMode" & mode).Value <> xlOn Then Fail "Output mode was reset."
+        If wsSql.OptionButtons("optOutputMode" & (3 - mode)).Value <> xlOff Then Fail "Output modes are not mutually exclusive."
+        If ExternalParserConfigured() Then
+            wsSql.Range("A2").Value = "INSERT INTO users (user_id) SELECT user_id FROM source_users WHERE user_id > 0"
+            AnalyzeQueries False
+            found = False
+            For Each cell In wsOutput.UsedRange.Cells
+                If cell.Interior.Color = expectedColor Then
+                    found = True
+                    If cell.Font.Color <> IIf(mode = 2, vbWhite, vbBlack) Then Fail "Output header font mismatch."
+                End If
+            Next cell
+            If Not found Then Fail "Output header fill missing."
+        End If
+    Next mode
 End Sub
 
 '@TestMethod("AnalyzeQueries")

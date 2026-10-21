@@ -110,6 +110,7 @@ try {
         'SetupWorkbook_CreatesOutputSheet',
         'SetupWorkbook_CreatesOutputTwoLayout',
         'SetupWorkbook_CreatesStableSqlActionButtons',
+        'OutputMode_PreviewsRendersAndSurvivesClear',
         'SetupWorkbook_ProvidesToastForm',
         'SetupWorkbook_TracksMissingNameFillColor',
         'CompletionToast_UsesTwoSecondDuration',

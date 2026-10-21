@@ -1059,6 +1059,100 @@ Private Sub EnsureSqlActionButtons(ByVal ws As Worksheet)
     EnsureSqlActionButton _
         ws, "btnClearData", ClearButtonText(), "ClearData", _
         buttonLeft + 82, buttonTop
+    EnsureOutputModeSelector ws
+End Sub
+
+Private Sub EnsureOutputModeSelector(ByVal ws As Worksheet)
+    Dim selector As Object
+    Dim mode As Long
+    Dim selectedMode As Long
+    Dim buttonLeft As Double
+    Dim preview As Shape
+    Dim background As Shape
+    selectedMode = 1
+    On Error Resume Next
+    selectedMode = ws.DropDowns("ddlOutputMode").ListIndex
+    Set preview = ws.Shapes("outputModePreview")
+    Set background = ws.Shapes("outputModeBackground")
+    On Error GoTo 0
+    DeleteShapeIfExists ws, "ddlOutputMode"
+    buttonLeft = ws.Columns("E").Left + 164
+    If background Is Nothing Then
+        Set background = ws.Shapes.AddShape(msoShapeRectangle, buttonLeft - 4, 2, 272, 26)
+        background.Name = "outputModeBackground"
+    End If
+    With background
+        .Placement = xlFreeFloating
+        .Left = buttonLeft - 4
+        .Top = 2
+        .Width = 272
+        .Height = 26
+        .Fill.Solid
+        .Fill.ForeColor.RGB = RGB(242, 242, 242)
+        .Line.Visible = msoTrue
+        .Line.ForeColor.RGB = RGB(180, 180, 180)
+        .Line.Weight = 0.75
+        .ZOrder msoSendToBack
+    End With
+    For mode = 1 To 2
+        Set selector = Nothing
+        On Error Resume Next
+        Set selector = ws.OptionButtons("optOutputMode" & mode)
+        On Error GoTo 0
+        If selector Is Nothing Then
+            Set selector = ws.OptionButtons.Add(buttonLeft + 4 + (mode - 1) * 88, 3, 88, 24)
+            selector.Name = "optOutputMode" & mode
+            selector.Value = IIf(mode = selectedMode, xlOn, xlOff)
+        End If
+        With selector
+            .Caption = W(&H30E2, &H30FC, &H30C9) & mode
+            .OnAction = "UpdateOutputModePreview"
+            .Placement = xlFreeFloating
+            .Left = buttonLeft + 4 + (mode - 1) * 88
+            .Top = 3
+            .Width = 88
+            .Height = 24
+        End With
+    Next mode
+    If preview Is Nothing Then
+        Set preview = ws.Shapes.AddShape(msoShapeRectangle, buttonLeft + 184, 6, 76, 18)
+        preview.Name = "outputModePreview"
+    End If
+    With preview
+        .Placement = xlFreeFloating
+        .Left = buttonLeft + 184
+        .Top = 6
+        .Width = 76
+        .Height = 18
+        .TextFrame.Characters.Text = W(&H898B, &H672C)
+        .TextFrame.HorizontalAlignment = xlHAlignCenter
+        .TextFrame.VerticalAlignment = xlVAlignCenter
+        .TextFrame.Characters.Font.Name = "MS UI Gothic"
+        .TextFrame.Characters.Font.Size = 9
+        .TextFrame.Characters.Font.Bold = False
+        .TextFrame.MarginTop = 0
+        .TextFrame.MarginBottom = 0
+        .Line.ForeColor.RGB = RGB(180, 180, 180)
+        .Line.Weight = 0.75
+    End With
+    UpdateOutputModePreview
+End Sub
+
+Private Function OutputModeTwo() As Boolean
+    ' The form control keeps its selection outside the cells cleared by ClearData.
+    OutputModeTwo = (ThisWorkbook.Worksheets(SqlSheetName()).OptionButtons("optOutputMode2").Value = xlOn)
+End Function
+
+Public Sub UpdateOutputModePreview()
+    With ThisWorkbook.Worksheets(SqlSheetName()).Shapes("outputModePreview")
+        .Fill.ForeColor.RGB = IIf(OutputModeTwo(), RGB(0, 0, 255), OUTPUT_FILL_COLOR)
+        .TextFrame.Characters.Font.Color = IIf(OutputModeTwo(), vbWhite, vbBlack)
+    End With
+End Sub
+
+Private Sub ApplyOutputHeaderColor(ByVal targetRange As Range)
+    targetRange.Interior.Color = IIf(OutputModeTwo(), RGB(0, 0, 255), OUTPUT_FILL_COLOR)
+    targetRange.Font.Color = IIf(OutputModeTwo(), vbWhite, vbBlack)
 End Sub
 
 ' SQL action buttons are repaired in place so a long-running analysis cannot leave them hidden or collapsed.
@@ -2384,6 +2478,7 @@ Private Sub ApplyOutputSectionStyle( _
             ws.Range(ws.Cells(startRow, 1), ws.Cells(endRow, OUTPUT_LAST_COLUMN)).Borders.LineStyle = xlNone
         Case "STANDARD"
             ApplyFilledFrame ws.Range(ws.Cells(startRow, 1), ws.Cells(endRow, 6)), OUTPUT_FILL_COLOR
+            ApplyOutputHeaderColor ws.Range(ws.Cells(startRow, 1), ws.Cells(endRow, 6))
             ApplyFilledFrame ws.Range(ws.Cells(startRow, 7), ws.Cells(endRow, OUTPUT_LAST_COLUMN)), vbWhite
         Case "TRANSFER"
             ApplyTransferSectionStyle ws, startRow, endRow
@@ -2436,9 +2531,7 @@ Private Sub ApplyTransferSectionStyle(ByVal ws As Worksheet, ByVal startRow As L
     ApplyInsideHorizontalBorder leftRange
     ApplyInsideHorizontalBorder middleRange
     ApplyInsideHorizontalBorder rightRange
-    ws.Range(ws.Cells(startRow, 1), ws.Cells(startRow, 18)).Interior.Color = OUTPUT_FILL_COLOR
-    ws.Range(ws.Cells(startRow, 19), ws.Cells(startRow, 36)).Interior.Color = OUTPUT_FILL_COLOR
-    ws.Range(ws.Cells(startRow, 37), ws.Cells(startRow, OUTPUT_LAST_COLUMN)).Interior.Color = OUTPUT_FILL_COLOR
+    ApplyOutputHeaderColor ws.Range(ws.Cells(startRow, 1), ws.Cells(startRow, OUTPUT_LAST_COLUMN))
     ApplyBottomBorder ws.Range(ws.Cells(startRow, 1), ws.Cells(startRow, 18))
     ApplyBottomBorder ws.Range(ws.Cells(startRow, 19), ws.Cells(startRow, 36))
     ApplyBottomBorder ws.Range(ws.Cells(startRow, 37), ws.Cells(startRow, OUTPUT_LAST_COLUMN))
