@@ -131,6 +131,7 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
     Set standaloneParserMap = CreateTextDictionary()
     Set qualifiedRegexes = CreateTextDictionary()
     Set standaloneRegexes = CreateTextDictionary()
+    Set replacementValues = CreateTextDictionary()
     Set replacementValuesByRow = CreateTextDictionary()
     Set queryLineRows = New Collection
     Set qualifications = New Collection
@@ -169,7 +170,7 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
                 sourceText = CStr(sqlValues(inputRowIndex, 1))
             End If
             If Len(sourceText) > 0 Then
-                Set replacementValues = CreateTextDictionary()
+                replacementValues.RemoveAll
                 convertedText = ApplyMappings( _
                     sourceText, qualifiedMap, qualifiedKeys, standaloneMap, standaloneKeys, _
                     replacementValues, True, qualifiedRegexes, standaloneRegexes)
@@ -178,7 +179,9 @@ Public Sub AnalyzeQueries(Optional ByVal showMessage As Boolean = True)
                     standaloneParserMap, standaloneKeys, Nothing, False, _
                     qualifiedRegexes, standaloneRegexes)
                 convertedValues(inputRowIndex, 1) = OutputTextValue(convertedText)
-                Set replacementValuesByRow(CStr(rowNumber)) = replacementValues
+                ' 行ごとのCOM辞書生成を避け、値と初出位置だけを保存する。
+                replacementValuesByRow(CStr(rowNumber)) = _
+                    Array(replacementValues.Keys, replacementValues.Items)
                 convertedLines(nonEmptyLineCount) = convertedText
                 parserLines(nonEmptyLineCount) = parserText
                 nonEmptyLineCount = nonEmptyLineCount + 1
@@ -412,9 +415,9 @@ End Sub
 Private Function ApplyMappings( _
     ByVal sourceText As String, _
     ByVal qualifiedMap As Object, _
-    ByVal qualifiedKeys As Variant, _
+    ByRef qualifiedKeys As Variant, _
     ByVal standaloneMap As Object, _
-    ByVal standaloneKeys As Variant, _
+    ByRef standaloneKeys As Variant, _
     ByVal replacementValues As Object, _
     Optional ByVal trackReplacements As Boolean = True, _
     Optional ByVal qualifiedRegexes As Object = Nothing, _
@@ -437,7 +440,7 @@ End Function
 Private Function ApplyMappingSet( _
     ByVal sourceText As String, _
     ByVal mapping As Object, _
-    ByVal sortedKeys As Variant, _
+    ByRef sortedKeys As Variant, _
     ByVal replacementValues As Object, _
     ByVal standaloneMode As Boolean, _
     ByVal trackReplacements As Boolean, _
@@ -1237,6 +1240,7 @@ Private Sub WriteReplacementValuesBatch( _
     ByRef maxReplacementCount As Long)
 
     Dim replacementValues As Object
+    Dim rowValues As Variant
     Dim replacementData() As Variant
     Dim keys As Variant
     Dim rowNumber As Long
@@ -1245,17 +1249,19 @@ Private Sub WriteReplacementValuesBatch( _
     maxReplacementCount = 0
     For rowNumber = 2 To lastRow
         If replacementValuesByRow.Exists(CStr(rowNumber)) Then
-            Set replacementValues = replacementValuesByRow(CStr(rowNumber))
-            maxReplacementCount = MaxLong(maxReplacementCount, replacementValues.Count)
+            rowValues = replacementValuesByRow(CStr(rowNumber))
+            keys = rowValues(0)
+            maxReplacementCount = MaxLong(maxReplacementCount, UBound(keys) + 1)
         End If
     Next rowNumber
 
     If maxReplacementCount = 0 Or lastRow < 2 Then Exit Sub
 
+    Set replacementValues = CreateTextDictionary()
     ReDim replacementData(1 To lastRow - 1, 1 To maxReplacementCount)
     For rowNumber = 2 To lastRow
         If replacementValuesByRow.Exists(CStr(rowNumber)) Then
-            Set replacementValues = replacementValuesByRow(CStr(rowNumber))
+            LoadReplacementValues replacementValues, replacementValuesByRow(CStr(rowNumber))
             If replacementValues.Count > 0 Then
                 keys = SortedKeysByValueAsc(replacementValues)
                 For index = LBound(keys) To UBound(keys)
@@ -1272,6 +1278,20 @@ Private Sub WriteReplacementValuesBatch( _
         .NumberFormat = "@"
         .Value = replacementData
     End With
+End Sub
+
+' 保存した行の値と初出位置を既存の辞書へ戻す。
+Private Sub LoadReplacementValues(ByVal replacementValues As Object, ByVal rowValues As Variant)
+    Dim keys As Variant
+    Dim positions As Variant
+    Dim index As Long
+
+    replacementValues.RemoveAll
+    keys = rowValues(0)
+    positions = rowValues(1)
+    For index = LBound(keys) To UBound(keys)
+        replacementValues.Add CStr(keys(index)), positions(index)
+    Next index
 End Sub
 
 ' parserへ渡す論理行番号とSQL解析シートの行番号を対応付け
@@ -2380,28 +2400,33 @@ Private Sub ApplyFinalReplacementValues( _
 
     Dim rowDictionary As Object
     Dim valueRecord As Variant
-    Dim rowKey As Variant
+    Dim rowKey As String
+    Dim previousRowKey As String
     Dim queryLine As Long
     Dim valueOrder As Long
 
-    ' v5のV行はC列へ出す最終値の完全な集合として扱う
-    For Each rowKey In replacementValuesByRow.Keys
-        Set rowDictionary = replacementValuesByRow(CStr(rowKey))
-        rowDictionary.RemoveAll
-    Next rowKey
+    ' v5のV行は検証済みの論理行順なので、1行分の辞書を使い回せる。
+    replacementValuesByRow.RemoveAll
+    Set rowDictionary = CreateTextDictionary()
 
     For Each valueRecord In finalReplacementValues
         queryLine = CLng(valueRecord(0))
         rowKey = CStr(queryLineRows.Item(queryLine))
-        If replacementValuesByRow.Exists(CStr(rowKey)) Then
-            Set rowDictionary = replacementValuesByRow(CStr(rowKey))
-        Else
-            Set rowDictionary = CreateTextDictionary()
-            Set replacementValuesByRow(CStr(rowKey)) = rowDictionary
+        If rowKey <> previousRowKey Then
+            If Len(previousRowKey) > 0 Then
+                replacementValuesByRow(previousRowKey) = _
+                    Array(rowDictionary.Keys, rowDictionary.Items)
+            End If
+            rowDictionary.RemoveAll
+            previousRowKey = rowKey
         End If
         valueOrder = valueOrder + 1
         AddReplacementValue rowDictionary, CStr(valueRecord(2)), valueOrder
     Next valueRecord
+    If Len(previousRowKey) > 0 Then
+        replacementValuesByRow(previousRowKey) = _
+            Array(rowDictionary.Keys, rowDictionary.Items)
+    End If
 End Sub
 
 ' parserが補完したプレフィックスを行別の変換内容へ反映
@@ -2415,14 +2440,17 @@ Private Sub ApplyReplacementQualifications( _
     Dim rowKey As String
     Dim replacementValues As Object
 
+    Set replacementValues = CreateTextDictionary()
     For Each qualification In qualifications
         queryLine = CLng(qualification(0))
         If queryLine <= queryLineRows.Count Then
             rowKey = CStr(queryLineRows.Item(queryLine))
             If replacementValuesByRow.Exists(rowKey) Then
-                Set replacementValues = replacementValuesByRow(rowKey)
+                LoadReplacementValues replacementValues, replacementValuesByRow(rowKey)
                 ApplyReplacementQualification _
                     replacementValues, CStr(qualification(2)), CStr(qualification(3))
+                replacementValuesByRow(rowKey) = _
+                    Array(replacementValues.Keys, replacementValues.Items)
             End If
         End If
     Next qualification

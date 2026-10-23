@@ -102,7 +102,7 @@ public sealed class TableUsageTests
     }
 
     [TestMethod]
-    public void Build_UpdateAndDelete_ExcludeTargetBindingFromInputs()
+    public void Build_UpdateAndDelete_IncludeReadTargetAndJoinSources()
     {
         const string updateSql = """
             UPDATE u

@@ -2303,6 +2303,59 @@ public sealed class OutputSheetPlanBuilderTests
         Assert.IsTrue(plan.ReplacementValues.All(value => value.QueryLine == 1));
     }
 
+    [TestMethod]
+    public void Build_BindsQuotedParserFieldsWithoutBindingLiteralsOrComments()
+    {
+        const string sql = """
+            SELECT tb1.[__SAF_FIELD_R000002__],
+                '__SAF_FIELD_R000002__'
+            FROM city1 AS tb1
+            UNION ALL
+            SELECT tb1.[__SAF_FIELD_R000002__],
+                '__SAF_FIELD_R000002__'
+            FROM city2 AS tb1; -- __SAF_FIELD_R000002__
+            """;
+        MappingDefinition[] mappings =
+        [
+            new("tb1", "都市1", "name", "都市名", "__SAF_FIELD_R000002__"),
+            new("city2", "都市2", "unused", "未使用")
+        ];
+
+        var plan = OutputSheetPlanBuilder.Build(sql, mappings);
+
+        Assert.IsFalse(plan.IsFallback);
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                new OutputReplacementValue(1, 13, "tb1.都市名"),
+                new OutputReplacementValue(2, 6, "tb1.都市名"),
+                new OutputReplacementValue(5, 13, "tb2.都市名"),
+                new OutputReplacementValue(6, 6, "tb1.都市名"),
+                new OutputReplacementValue(7, 23, "tb1.都市名")
+            },
+            plan.ReplacementValues.ToArray());
+    }
+
+    [TestMethod]
+    public void Build_ReturnsRepeatedParserFieldsInSqlOrder()
+    {
+        const int itemCount = 2048;
+        var sql = "SELECT\n" + string.Join(",\n", Enumerable.Range(1, itemCount)
+            .Select(index => $"    tb1.[__SAF_FIELD_R000002__] AS item{index}")) +
+            "\nFROM users AS tb1;";
+
+        var plan = OutputSheetPlanBuilder.Build(sql,
+            [new("tb1", "ユーザー", "name", "名前", "__SAF_FIELD_R000002__")]);
+
+        Assert.IsFalse(plan.IsFallback);
+        Assert.AreEqual(itemCount + 2, plan.RowCount);
+        CollectionAssert.AreEqual(
+            Enumerable.Range(1, itemCount)
+                .Select(index => new OutputReplacementValue(index + 1, 10, "tb1.名前"))
+                .ToArray(),
+            plan.ReplacementValues.ToArray());
+    }
+
     /// <summary>
     /// 別名の文字列・コメントと内側で再定義した同名別名はB列でも変更しない
     /// </summary>

@@ -325,23 +325,37 @@ public static class OutputSheetPlanBuilder
 
         var parserColumns = script is null
             ? []
-            : ParserFieldColumnCollector.Collect(script, mappingsByParserId.Keys);
+            : ParserFieldColumnCollector.Collect(script, mappingsByParserId.Keys)
+                .OrderBy(item => item.FieldIdentifier.StartOffset)
+                .ToArray();
         var replacementsByOffset = aliasReplacements
             .GroupBy(item => item.Offset)
             .ToDictionary(group => group.Key, group => group.Last());
         var positions = SqlTextPositions(sql, occurrences.Select(item => item.Offset));
         var values = new List<OutputReplacementValue>(occurrences.Length);
+        var columnIndex = 0;
         for (var index = 0; index < occurrences.Length; index++)
         {
             var occurrence = occurrences[index];
-            var column = parserColumns.FirstOrDefault(item =>
-                string.Equals(
-                    item.FieldIdentifier.Value,
+            // 両方をSQL順に進め、各出現で全列を再走査しない。
+            while (columnIndex < parserColumns.Length &&
+                parserColumns[columnIndex].FieldIdentifier.StartOffset +
+                    parserColumns[columnIndex].FieldIdentifier.FragmentLength <= occurrence.Offset)
+            {
+                columnIndex++;
+            }
+            var column = columnIndex < parserColumns.Length
+                ? parserColumns[columnIndex]
+                : null;
+            if (column is not null &&
+                (occurrence.Offset < column.FieldIdentifier.StartOffset ||
+                !string.Equals(
+                    column.FieldIdentifier.Value,
                     occurrence.Mapping.ParserFieldId,
-                    StringComparison.Ordinal) &&
-                occurrence.Offset >= item.FieldIdentifier.StartOffset &&
-                occurrence.Offset < item.FieldIdentifier.StartOffset +
-                    item.FieldIdentifier.FragmentLength);
+                    StringComparison.Ordinal)))
+            {
+                column = null;
+            }
             var value = ReplacementValueFor(
                 sql,
                 occurrence.Mapping,

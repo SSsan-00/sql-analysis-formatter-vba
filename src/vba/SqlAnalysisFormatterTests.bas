@@ -52,6 +52,7 @@ Public Sub RunAllSqlAnalysisFormatterTests(Optional ByVal showMessage As Boolean
     AnalyzeQueries_QualifiesUnqualifiedSelectColumns
     AnalyzeQueries_QualifiesStandaloneColumnThroughTableName
     AnalyzeQueries_WritesQualifiedReplacementValuesOnce
+    AnalyzeQueries_KeepsReplacementValuesIndependentByRow
     AnalyzeQueries_MapsQualifiedReplacementsToMultilineRows
     AnalyzeQueries_PreservesReplacementValuesOnParserFallback
     AnalyzeQueries_FocusesSyntaxFallbackSqlRow
@@ -628,7 +629,7 @@ Public Sub AnalyzeQueries_RendersMatchedInputAndOutputTables()
 End Sub
 
 '@TestMethod("AnalyzeQueries")
-' UPDATEの対象行セットを入力から除外し、独立した自己参照だけを入力へ含めることを確認
+' ON句で読み取る更新対象と独立した自己参照を入力へ含め、列を読まない対象は除外する。
 Public Sub AnalyzeQueries_ClassifiesModificationTargetsByRole()
     Dim wsRef As Worksheet
     Dim wsSql As Worksheet
@@ -651,6 +652,19 @@ Public Sub AnalyzeQueries_ClassifiesModificationTargetsByRole()
     wsSql.Cells(2, COL_SQL).Value = _
         "UPDATE u SET location_name = l.name " & _
         "FROM users AS u JOIN locations AS l ON l.id = u.location_id;"
+
+    AnalyzeQueries False
+
+    AssertOutputTwoRow wsOutput, 4, 1, "locations", "location master", "1-1"
+    AssertOutputTwoRow wsOutput, 5, 1, "users", "user master", "2-1"
+    AssertCellValue wsOutput.Range("C6"), ""
+    AssertOutputTwoRow wsOutput, 4, 53, "users", "user master", "2-1"
+    AssertCellValue wsOutput.Range("BC5"), ""
+
+    wsSql.Range("A2:Z200").ClearContents
+    wsSql.Cells(2, COL_SQL).Value = _
+        "UPDATE u SET location_name = l.name " & _
+        "FROM users AS u JOIN locations AS l ON l.id = 1;"
 
     AnalyzeQueries False
 
@@ -1987,6 +2001,41 @@ Public Sub AnalyzeQueries_WritesQualifiedReplacementValuesOnce()
 
     AssertCellValue wsSql.Cells(2, COL_REPLACEMENT), "tb1." & nameText
     AssertCellValue wsSql.Cells(2, COL_REPLACEMENT + 1), ""
+End Sub
+
+'@TestMethod("AnalyzeQueries")
+' 正常解析と構文エラーの両方で、行別の順序・重複排除・空行を維持する。
+Public Sub AnalyzeQueries_KeepsReplacementValuesIndependentByRow()
+    Dim wsRef As Worksheet
+    Dim wsSql As Worksheet
+    Dim fromClause As Variant
+
+    SetupWorkbook
+    Set wsRef = ThisWorkbook.Worksheets(ReferenceSheetName())
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    wsRef.Range("A2:D200").ClearContents
+    wsSql.Range("A2:Z200").ClearContents
+    PutDefinition wsRef, 2, "tb1", "Users", "alpha", "Name"
+    PutDefinition wsRef, 3, "tb1", "Users", "beta", "Name"
+    PutDefinition wsRef, 4, "tb1", "Users", "gamma", "Age"
+    wsSql.Cells(2, COL_SQL).Value = "SELECT tb1.alpha, tb1.beta, tb1.gamma"
+    wsSql.Cells(4, COL_SQL).Value = ", tb1.gamma, tb1.alpha"
+
+    For Each fromClause In Array("FROM users tb1;", "FROM;")
+        wsSql.Cells(5, COL_SQL).Value = CStr(fromClause)
+        AnalyzeQueries False
+
+        AssertCellValue wsSql.Cells(2, COL_RESULT), "SELECT tb1.Name, tb1.Name, tb1.Age"
+        AssertCellValue wsSql.Cells(4, COL_RESULT), ", tb1.Age, tb1.Name"
+        AssertCellValue wsSql.Cells(2, COL_REPLACEMENT), "tb1.Name"
+        AssertCellValue wsSql.Cells(2, COL_REPLACEMENT + 1), "tb1.Age"
+        AssertCellValue wsSql.Cells(2, COL_REPLACEMENT + 2), ""
+        AssertCellValue wsSql.Cells(3, COL_REPLACEMENT), ""
+        AssertCellValue wsSql.Cells(4, COL_REPLACEMENT), "tb1.Age"
+        AssertCellValue wsSql.Cells(4, COL_REPLACEMENT + 1), "tb1.Name"
+        AssertCellValue wsSql.Cells(4, COL_REPLACEMENT + 2), ""
+        AssertCellValue wsSql.Cells(5, COL_REPLACEMENT), ""
+    Next fromClause
 End Sub
 
 '@TestMethod("AnalyzeQueries")

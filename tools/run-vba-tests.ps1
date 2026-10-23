@@ -146,6 +146,7 @@ try {
         'AnalyzeQueries_QualifiesUnqualifiedSelectColumns',
         'AnalyzeQueries_QualifiesStandaloneColumnThroughTableName',
         'AnalyzeQueries_WritesQualifiedReplacementValuesOnce',
+        'AnalyzeQueries_KeepsReplacementValuesIndependentByRow',
         'AnalyzeQueries_MapsQualifiedReplacementsToMultilineRows',
         'AnalyzeQueries_PreservesReplacementValuesOnParserFallback',
         'AnalyzeQueries_FocusesSyntaxFallbackSqlRow',
