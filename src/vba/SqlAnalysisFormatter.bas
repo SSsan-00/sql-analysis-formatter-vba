@@ -1528,6 +1528,7 @@ Private Function ApplyOutputPlan( _
     Dim previousColumn As Long
     Dim targetColumn As Long
     Dim outputLastColumn As Long
+    Dim transferRows() As Boolean
     Dim section As Variant
     Dim sections As Collection
     Dim parsedQualifications As Collection
@@ -1757,6 +1758,14 @@ Private Function ApplyOutputPlan( _
         Set compactReferences = New Collection
         If rowCount > 0 Then
             ReDim compactValues(1 To rowCount, 1 To COMPACT_OUTPUT_LAST_COLUMN)
+            ReDim transferRows(1 To rowCount)
+            For Each section In sections
+                If UCase$(CStr(section(0))) = "TRANSFER" Then
+                    For rowNumber = CLng(section(1)) To CLng(section(2))
+                        transferRows(rowNumber) = True
+                    Next rowNumber
+                End If
+            Next section
             Set usedOutputColumns = CreateTextDictionary()
             For rowNumber = 1 To rowCount
                 remainingCells = 0
@@ -1773,6 +1782,10 @@ Private Function ApplyOutputPlan( _
                             targetColumn = ((columnNumber - 1) * 16 + 18) \ 36 + 1
                         Else
                             targetColumn = 17 + ((columnNumber - 37) * 21 + 26) \ 53
+                        End If
+                        If Not transferRows(rowNumber) Then
+                            If columnNumber = 15 Then targetColumn = 9
+                            If columnNumber = 17 Then targetColumn = 10
                         End If
                         targetColumn = MaxLong(targetColumn, previousColumn + 1)
                         If targetColumn > COMPACT_OUTPUT_LAST_COLUMN - remainingCells Then _
@@ -1899,7 +1912,7 @@ Private Sub ApplyOutputTwoNamesToMissingTableDisplays( _
         Exit Sub
     End If
 
-    joinColumn = IIf(OutputCopyLastColumn(wsOutput) = COMPACT_OUTPUT_LAST_COLUMN, 8, 17)
+    joinColumn = IIf(OutputCopyLastColumn(wsOutput) = COMPACT_OUTPUT_LAST_COLUMN, 10, 17)
     lastRow = LastOutputRow(wsOutput, OUTPUT_LAST_COLUMN)
     If lastRow < 1 Then Exit Sub
     If lastRow = 1 Then

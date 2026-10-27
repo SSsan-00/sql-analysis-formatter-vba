@@ -741,7 +741,7 @@ Public Sub AnalyzeQueries_UsesOutputTwoNameForExactMissingReference()
     wsSql.OptionButtons("optOutputMode2").Value = xlOn
     AnalyzeQueries False
     AssertCellValue wsOutput.Cells(2, 1), expectedReference
-    If wsOutput.Columns(8).Find(What:="user master", LookIn:=xlValues, LookAt:=xlPart) Is Nothing Then _
+    If wsOutput.Columns(10).Find(What:="user master", LookIn:=xlValues, LookAt:=xlPart) Is Nothing Then _
         Fail "Compact JOIN heading lost its resolved table name."
     wsSql.OptionButtons("optOutputMode1").Value = xlOn
     wsTableList.Range("A2:C200").ClearContents
@@ -1793,6 +1793,16 @@ Public Sub CopyOutput_ModeTwoFitsAndPreservesValues()
             Next columnNumber
         Next rowNumber
     Next sample
+    wsSql.Range("A2:Z200").ClearContents
+    wsSql.Cells(2, COL_SQL).Value = "SELECT t.a FROM source_table t GROUP BY t.a"
+    wsSql.OptionButtons("optOutputMode2").Value = xlOn
+    AnalyzeQueries False
+    Dim groupLabel As Range
+    Set groupLabel = wsOutput.Cells.Find(What:=W(&H30B0, &H30EB, &H30FC, &H30D7, &H30AD, &H30FC) & "1", _
+        LookIn:=xlValues, LookAt:=xlWhole)
+    If groupLabel Is Nothing Then Fail "Compact group key label is missing."
+    If groupLabel.Column <> 4 Or CStr(wsOutput.Cells(groupLabel.Row, 9).Value2) <> ":" Then _
+        Fail "Compact group key label does not have enough space before its colon."
     Application.CutCopyMode = False
     previousDisplayAlerts = Application.DisplayAlerts
     Application.DisplayAlerts = False
