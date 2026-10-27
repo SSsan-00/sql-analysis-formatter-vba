@@ -122,6 +122,7 @@ try {
         'AnalyzeQueries_ShowsCompletionToastOnSuccess',
         'AnalyzeQueries_ShowMessageFalseDoesNotShowToast',
         'CopyOutput_CopiesRenderedRange',
+        'CopyOutput_ModeTwoFitsAndPreservesValues',
         'CopyOutputTwo_CopiesRenderedRange',
         'AnalyzeQueries_ConvertsCrudFixtures',
         'AnalyzeQueries_ConvertsTsqlFunctionFixtures',

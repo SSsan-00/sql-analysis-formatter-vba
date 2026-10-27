@@ -14,6 +14,8 @@ Private Const COL_RESULT As Long = 2
 Private Const COL_REPLACEMENT As Long = 3
 
 Private Const OUTPUT_LAST_COLUMN As Long = 90
+Private Const COMPACT_OUTPUT_LAST_COLUMN As Long = 38
+Private Const COMPACT_OUTPUT_COLUMN_WIDTH As Double = 2.29
 Private Const OUTPUT_TWO_LAST_COLUMN As Long = 100
 Private Const OUTPUT_COLUMN_WIDTH As Double = 1.14
 Private Const OUTPUT_ROW_HEIGHT As Double = 13.5
@@ -723,12 +725,27 @@ Private Sub ApplyOutputSheetLayout(ByVal ws As Worksheet)
     lastRow = LastOutputRow(ws)
     ApplyOutputColumnFont ws, OUTPUT_LAST_COLUMN
     ApplyOutputSheetDimensions ws, lastRow, OUTPUT_LAST_COLUMN, True, True
+    If OutputCopyLastColumn(ws) = COMPACT_OUTPUT_LAST_COLUMN Then _
+        ws.Range(ws.Columns(1), ws.Columns(COMPACT_OUTPUT_LAST_COLUMN)).ColumnWidth = COMPACT_OUTPUT_COLUMN_WIDTH
     ApplyOutputSheetView ws
 End Sub
 
 ' アウトプットシートの成果物をA列からCL列までコピー
 Public Sub CopyOutput(Optional ByVal showMessage As Boolean = True)
-    CopyOutputRange GetOutputSheet(), OUTPUT_LAST_COLUMN, showMessage, "CopyOutput"
+    Dim ws As Worksheet
+    Set ws = GetOutputSheet()
+    CopyOutputRange ws, OutputCopyLastColumn(ws), showMessage, "CopyOutput"
+End Sub
+
+Private Function OutputCopyLastColumn(ByVal ws As Worksheet) As Long
+    On Error Resume Next
+    OutputCopyLastColumn = CLng(ws.Evaluate(ws.Names("SafOutputLastColumn").RefersTo))
+    On Error GoTo 0
+    If OutputCopyLastColumn <> COMPACT_OUTPUT_LAST_COLUMN Then OutputCopyLastColumn = OUTPUT_LAST_COLUMN
+End Function
+
+Private Sub SetOutputCopyLastColumn(ByVal ws As Worksheet, ByVal lastColumn As Long)
+    ws.Names.Add Name:="SafOutputLastColumn", RefersTo:="=" & CStr(lastColumn)
 End Sub
 
 ' アウトプット②の使用範囲をクリップボードへコピー
@@ -756,7 +773,7 @@ Private Sub CopyOutputRange( _
     End If
 
     wsOutput.Range(wsOutput.Cells(1, 1), wsOutput.Cells(lastRow, lastColumn)).Copy
-    If showMessage Then MsgBox CopyDoneMessage(), vbInformation
+    If showMessage Then SqlAnalysisToastManager.ShowToast CopyDoneMessage()
     Exit Sub
 
 CopyFail:
@@ -1504,6 +1521,13 @@ Private Function ApplyOutputPlan( _
     Dim lines As Variant
     Dim fields As Variant
     Dim cellValues As Variant
+    Dim compactValues As Variant
+    Dim compactReferences As Collection
+    Dim compactColumns As Object
+    Dim remainingCells As Long
+    Dim previousColumn As Long
+    Dim targetColumn As Long
+    Dim outputLastColumn As Long
     Dim section As Variant
     Dim sections As Collection
     Dim parsedQualifications As Collection
@@ -1726,8 +1750,53 @@ Private Function ApplyOutputPlan( _
         Next tableNameReference
     End If
 
+    outputLastColumn = OUTPUT_LAST_COLUMN
+    If OutputModeTwo() Then
+        outputLastColumn = COMPACT_OUTPUT_LAST_COLUMN
+        Set compactColumns = CreateTextDictionary()
+        Set compactReferences = New Collection
+        If rowCount > 0 Then
+            ReDim compactValues(1 To rowCount, 1 To COMPACT_OUTPUT_LAST_COLUMN)
+            Set usedOutputColumns = CreateTextDictionary()
+            For rowNumber = 1 To rowCount
+                remainingCells = 0
+                For columnNumber = 1 To OUTPUT_LAST_COLUMN
+                    If Len(CStr(cellValues(rowNumber, columnNumber))) > 0 Then remainingCells = remainingCells + 1
+                Next columnNumber
+                If remainingCells > COMPACT_OUTPUT_LAST_COLUMN Then GoTo InvalidPlan
+                previousColumn = 0
+                For columnNumber = 1 To OUTPUT_LAST_COLUMN
+                    If Len(CStr(cellValues(rowNumber, columnNumber))) > 0 Then
+                        remainingCells = remainingCells - 1
+                        ' 見出しと移送表の区切りを維持し、同じ行の値が重ならないように配置する。
+                        If columnNumber <= 37 Then
+                            targetColumn = ((columnNumber - 1) * 16 + 18) \ 36 + 1
+                        Else
+                            targetColumn = 17 + ((columnNumber - 37) * 21 + 26) \ 53
+                        End If
+                        targetColumn = MaxLong(targetColumn, previousColumn + 1)
+                        If targetColumn > COMPACT_OUTPUT_LAST_COLUMN - remainingCells Then _
+                            targetColumn = COMPACT_OUTPUT_LAST_COLUMN - remainingCells
+                        compactValues(rowNumber, targetColumn) = cellValues(rowNumber, columnNumber)
+                        compactColumns(CStr(rowNumber) & vbTab & CStr(columnNumber)) = targetColumn
+                        usedOutputColumns(CStr(targetColumn)) = targetColumn
+                        previousColumn = targetColumn
+                    End If
+                Next columnNumber
+            Next rowNumber
+            cellValues = compactValues
+        End If
+        For Each tableNameReference In parsedTableNameReferences
+            recordKey = CStr(tableNameReference(0)) & vbTab & CStr(tableNameReference(1))
+            If Not compactColumns.Exists(recordKey) Then GoTo InvalidPlan
+            compactReferences.Add Array(tableNameReference(0), compactColumns(recordKey), _
+                tableNameReference(2), tableNameReference(3), tableNameReference(4))
+        Next tableNameReference
+        Set parsedTableNameReferences = compactReferences
+    End If
+
     If rowCount > 0 Then
-        Set outputRange = ws.Range(ws.Cells(1, 1), ws.Cells(rowCount, OUTPUT_LAST_COLUMN))
+        Set outputRange = ws.Range(ws.Cells(1, 1), ws.Cells(rowCount, outputLastColumn))
         For Each usedColumn In usedOutputColumns.Items
             ws.Range( _
                 ws.Cells(1, CLng(usedColumn)), _
@@ -1738,6 +1807,9 @@ Private Function ApplyOutputPlan( _
     End If
     ' 長文・改行を含む値の書込み後に折り返し、縮小表示、行高を確定する
     ApplyOutputSheetDimensions ws, rowCount, OUTPUT_LAST_COLUMN, False
+    If outputLastColumn = COMPACT_OUTPUT_LAST_COLUMN Then _
+        ws.Range(ws.Columns(1), ws.Columns(outputLastColumn)).ColumnWidth = COMPACT_OUTPUT_COLUMN_WIDTH
+    SetOutputCopyLastColumn ws, outputLastColumn
     For Each section In sections
         ApplyOutputSectionStyle ws, CStr(section(0)), CLng(section(1)), CLng(section(2))
     Next section
@@ -1810,6 +1882,7 @@ Private Sub ApplyOutputTwoNamesToMissingTableDisplays( _
     Dim matchedNames As Object
     Dim referenceValues As Variant
     Dim joinHeadingValues As Variant
+    Dim joinColumn As Long
     Dim rowNumber As Long
     Dim lastRow As Long
     Dim referencePrefix As String
@@ -1826,20 +1899,21 @@ Private Sub ApplyOutputTwoNamesToMissingTableDisplays( _
         Exit Sub
     End If
 
+    joinColumn = IIf(OutputCopyLastColumn(wsOutput) = COMPACT_OUTPUT_LAST_COLUMN, 8, 17)
     lastRow = LastOutputRow(wsOutput, OUTPUT_LAST_COLUMN)
     If lastRow < 1 Then Exit Sub
     If lastRow = 1 Then
         ReDim referenceValues(1 To 1, 1 To 1)
         ReDim joinHeadingValues(1 To 1, 1 To 1)
         referenceValues(1, 1) = wsOutput.Cells(1, 1).Value2
-        joinHeadingValues(1, 1) = wsOutput.Cells(1, 17).Value2
+        joinHeadingValues(1, 1) = wsOutput.Cells(1, joinColumn).Value2
     Else
         referenceValues = wsOutput.Range( _
             wsOutput.Cells(1, 1), _
             wsOutput.Cells(lastRow, 1)).Value2
         joinHeadingValues = wsOutput.Range( _
-            wsOutput.Cells(1, 17), _
-            wsOutput.Cells(lastRow, 17)).Value2
+            wsOutput.Cells(1, joinColumn), _
+            wsOutput.Cells(lastRow, joinColumn)).Value2
     End If
 
     referencePrefix = ReferenceTablesText() & ": "
@@ -1859,7 +1933,7 @@ Private Sub ApplyOutputTwoNamesToMissingTableDisplays( _
             updatedText = ReplaceMissingOutputTableNames( _
                 cellText, matchedNames, True)
             If StrComp(updatedText, cellText, vbBinaryCompare) <> 0 Then
-                SetOutputCellText wsOutput.Cells(rowNumber, 17), updatedText
+                SetOutputCellText wsOutput.Cells(rowNumber, joinColumn), updatedText
             End If
         End If
     Next rowNumber
@@ -2502,20 +2576,25 @@ Private Sub ApplyOutputSectionStyle( _
     ByVal startRow As Long, _
     ByVal endRow As Long)
 
+    Dim lastColumn As Long
+    Dim headerEnd As Long
+    lastColumn = IIf(OutputModeTwo(), COMPACT_OUTPUT_LAST_COLUMN, OUTPUT_LAST_COLUMN)
+    headerEnd = IIf(OutputModeTwo(), 3, 6)
+
     Select Case UCase$(sectionKind)
         Case "REFERENCE"
             ' タイトルと参照テーブル行は表の外側として扱う
-            ws.Range(ws.Cells(startRow, 1), ws.Cells(endRow, OUTPUT_LAST_COLUMN)).Borders.LineStyle = xlNone
+            ws.Range(ws.Cells(startRow, 1), ws.Cells(endRow, lastColumn)).Borders.LineStyle = xlNone
         Case "STANDARD"
-            ApplyFilledFrame ws.Range(ws.Cells(startRow, 1), ws.Cells(endRow, 6)), OUTPUT_FILL_COLOR
-            ApplyOutputHeaderColor ws.Range(ws.Cells(startRow, 1), ws.Cells(endRow, 6))
-            ApplyFilledFrame ws.Range(ws.Cells(startRow, 7), ws.Cells(endRow, OUTPUT_LAST_COLUMN)), vbWhite
+            ApplyFilledFrame ws.Range(ws.Cells(startRow, 1), ws.Cells(endRow, headerEnd)), OUTPUT_FILL_COLOR
+            ApplyOutputHeaderColor ws.Range(ws.Cells(startRow, 1), ws.Cells(endRow, headerEnd))
+            ApplyFilledFrame ws.Range(ws.Cells(startRow, headerEnd + 1), ws.Cells(endRow, lastColumn)), vbWhite
         Case "TRANSFER"
             ApplyTransferSectionStyle ws, startRow, endRow
         Case "TRANSFER_GROUP"
             ApplyTransferGroupStyle ws, startRow, endRow
         Case "SEPARATOR"
-            ApplySeparatorBorder ws.Range(ws.Cells(startRow, 1), ws.Cells(endRow, OUTPUT_LAST_COLUMN))
+            ApplySeparatorBorder ws.Range(ws.Cells(startRow, 1), ws.Cells(endRow, lastColumn))
         Case Else
             Err.Raise vbObjectError + 520, "ApplyOutputSectionStyle", "Unknown section kind: " & sectionKind
     End Select
@@ -2526,10 +2605,14 @@ Private Sub ApplyTransferGroupStyle(ByVal ws As Worksheet, ByVal startRow As Lon
     Dim leftRange As Range
     Dim middleRange As Range
     Dim rightRange As Range
+    Dim firstEnd As Long, secondEnd As Long, lastColumn As Long
+    firstEnd = IIf(OutputModeTwo(), 8, 18)
+    secondEnd = IIf(OutputModeTwo(), 16, 36)
+    lastColumn = IIf(OutputModeTwo(), COMPACT_OUTPUT_LAST_COLUMN, OUTPUT_LAST_COLUMN)
 
-    Set leftRange = ws.Range(ws.Cells(startRow, 1), ws.Cells(endRow, 18))
-    Set middleRange = ws.Range(ws.Cells(startRow, 19), ws.Cells(endRow, 36))
-    Set rightRange = ws.Range(ws.Cells(startRow, 37), ws.Cells(endRow, OUTPUT_LAST_COLUMN))
+    Set leftRange = ws.Range(ws.Cells(startRow, 1), ws.Cells(endRow, firstEnd))
+    Set middleRange = ws.Range(ws.Cells(startRow, firstEnd + 1), ws.Cells(endRow, secondEnd))
+    Set rightRange = ws.Range(ws.Cells(startRow, secondEnd + 1), ws.Cells(endRow, lastColumn))
 
     ClearInsideHorizontalBorder leftRange
     ClearInsideHorizontalBorder middleRange
@@ -2550,10 +2633,14 @@ Private Sub ApplyTransferSectionStyle(ByVal ws As Worksheet, ByVal startRow As L
     Dim leftRange As Range
     Dim middleRange As Range
     Dim rightRange As Range
+    Dim firstEnd As Long, secondEnd As Long, lastColumn As Long
+    firstEnd = IIf(OutputModeTwo(), 8, 18)
+    secondEnd = IIf(OutputModeTwo(), 16, 36)
+    lastColumn = IIf(OutputModeTwo(), COMPACT_OUTPUT_LAST_COLUMN, OUTPUT_LAST_COLUMN)
 
-    Set leftRange = ws.Range(ws.Cells(startRow, 1), ws.Cells(endRow, 18))
-    Set middleRange = ws.Range(ws.Cells(startRow, 19), ws.Cells(endRow, 36))
-    Set rightRange = ws.Range(ws.Cells(startRow, 37), ws.Cells(endRow, OUTPUT_LAST_COLUMN))
+    Set leftRange = ws.Range(ws.Cells(startRow, 1), ws.Cells(endRow, firstEnd))
+    Set middleRange = ws.Range(ws.Cells(startRow, firstEnd + 1), ws.Cells(endRow, secondEnd))
+    Set rightRange = ws.Range(ws.Cells(startRow, secondEnd + 1), ws.Cells(endRow, lastColumn))
 
     ApplyFilledFrame leftRange, vbWhite
     ApplyFilledFrame middleRange, vbWhite
@@ -2561,10 +2648,10 @@ Private Sub ApplyTransferSectionStyle(ByVal ws As Worksheet, ByVal startRow As L
     ApplyInsideHorizontalBorder leftRange
     ApplyInsideHorizontalBorder middleRange
     ApplyInsideHorizontalBorder rightRange
-    ApplyOutputHeaderColor ws.Range(ws.Cells(startRow, 1), ws.Cells(startRow, OUTPUT_LAST_COLUMN))
-    ApplyBottomBorder ws.Range(ws.Cells(startRow, 1), ws.Cells(startRow, 18))
-    ApplyBottomBorder ws.Range(ws.Cells(startRow, 19), ws.Cells(startRow, 36))
-    ApplyBottomBorder ws.Range(ws.Cells(startRow, 37), ws.Cells(startRow, OUTPUT_LAST_COLUMN))
+    ApplyOutputHeaderColor ws.Range(ws.Cells(startRow, 1), ws.Cells(startRow, lastColumn))
+    ApplyBottomBorder ws.Range(ws.Cells(startRow, 1), ws.Cells(startRow, firstEnd))
+    ApplyBottomBorder ws.Range(ws.Cells(startRow, firstEnd + 1), ws.Cells(startRow, secondEnd))
+    ApplyBottomBorder ws.Range(ws.Cells(startRow, secondEnd + 1), ws.Cells(startRow, lastColumn))
 End Sub
 
 ' 指定範囲の行間へ最細の黒い罫線を設定
@@ -2682,6 +2769,10 @@ Private Sub WriteFallbackOutput(ByVal wsOutput As Worksheet, ByVal queryText As 
     wsOutput.Cells(reasonRow, 1).Value = FallbackReasonPrefix() & reason & _
         FallbackQueryLocation(1, queryEndRow)
     ApplyOutputSheetDimensions wsOutput, reasonRow
+    If OutputModeTwo() Then
+        wsOutput.Range(wsOutput.Columns(1), wsOutput.Columns(COMPACT_OUTPUT_LAST_COLUMN)).ColumnWidth = COMPACT_OUTPUT_COLUMN_WIDTH
+        SetOutputCopyLastColumn wsOutput, COMPACT_OUTPUT_LAST_COLUMN
+    End If
     ApplyOutputSheetFont wsOutput, reasonRow
     ApplyOutputSheetView wsOutput
 End Sub
@@ -3063,6 +3154,7 @@ Private Sub ClearOutputSheet(ByVal ws As Worksheet, Optional ByVal applyLayout A
     With ws.Range(ws.Cells(1, 1), ws.Cells(MaxLong(clearLastRow, 1), OUTPUT_LAST_COLUMN))
         .Clear
     End With
+    SetOutputCopyLastColumn ws, OUTPUT_LAST_COLUMN
     If applyLayout Then ApplyOutputSheetLayout ws
 End Sub
 

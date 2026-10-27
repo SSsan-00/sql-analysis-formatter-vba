@@ -738,6 +738,12 @@ Public Sub AnalyzeQueries_UsesOutputTwoNameForExactMissingReference()
     AssertCellValue wsOutputTwo.Range("C5"), "orders"
     AssertCellValue wsOutputTwo.Range("S6"), ""
     AssertCellValue wsOutputTwo.Range("S7"), "table-list location"
+    wsSql.OptionButtons("optOutputMode2").Value = xlOn
+    AnalyzeQueries False
+    AssertCellValue wsOutput.Cells(2, 1), expectedReference
+    If wsOutput.Columns(8).Find(What:="user master", LookIn:=xlValues, LookAt:=xlPart) Is Nothing Then _
+        Fail "Compact JOIN heading lost its resolved table name."
+    wsSql.OptionButtons("optOutputMode1").Value = xlOn
     wsTableList.Range("A2:C200").ClearContents
 End Sub
 
@@ -1725,6 +1731,73 @@ Public Sub SetupWorkbook_TracksMissingNameFillColor()
             wsRef.Cells(3, columnNumber), RGB(252, 228, 214)
     Next columnNumber
     wsRef.Range("A2:D3").ClearContents
+End Sub
+
+'@TestMethod("CopyOutput")
+Public Sub CopyOutput_ModeTwoFitsAndPreservesValues()
+    Dim wsSql As Worksheet, wsOutput As Worksheet, pasteSheet As Worksheet
+    Dim originalValues As Variant, compactValues As Variant
+    Dim sample As Variant, rowNumber As Long, columnNumber As Long, compactColumn As Long
+    Dim lastRow As Long, previousDisplayAlerts As Boolean
+
+    If Not ExternalParserConfigured() Then Exit Sub
+    SetupWorkbook
+    Set wsSql = ThisWorkbook.Worksheets(SqlSheetName())
+    Set wsOutput = ThisWorkbook.Worksheets(OutputSheetName())
+    Set pasteSheet = ThisWorkbook.Worksheets.Add
+    For Each sample In Array( _
+        "SELECT CASE WHEN ((t.a = 1 OR t.b = 2) AND (t.c = 3 OR t.d = 4)) " & _
+            "THEN 'X' ELSE 'Y' END AS result_code FROM source_table t", _
+        "INSERT INTO target_table (a) SELECT CASE WHEN t.a = 1 THEN t.b ELSE t.c END FROM source_table t")
+        wsSql.Range("A2:Z200").ClearContents
+        wsSql.Cells(2, COL_SQL).Value = CStr(sample)
+        wsSql.OptionButtons("optOutputMode1").Value = xlOn
+        AnalyzeQueries False
+        lastRow = wsOutput.Cells.Find("*", SearchOrder:=xlByRows, SearchDirection:=xlPrevious).Row
+        originalValues = wsOutput.Range(wsOutput.Cells(1, 1), wsOutput.Cells(lastRow, 90)).Value2
+        wsSql.OptionButtons("optOutputMode2").Value = xlOn
+        AnalyzeQueries False
+        If wsOutput.Cells.Find(What:="ELSE", LookIn:=xlValues, LookAt:=xlPart) Is Nothing Then _
+            Fail "Compact output did not render the CASE expression."
+        If wsOutput.Cells.Find(What:="*", SearchOrder:=xlByColumns, SearchDirection:=xlPrevious).Column > 38 Then _
+            Fail "Compact output contains values beyond AP."
+        compactValues = wsOutput.Range(wsOutput.Cells(1, 1), wsOutput.Cells(lastRow, 38)).Value2
+        If Abs(wsOutput.Columns(1).ColumnWidth - 2.29) > 0.1 Then Fail "Compact output column width mismatch."
+        If Application.CountA(wsOutput.Range(wsOutput.Cells(1, 39), wsOutput.Cells(lastRow, 90))) <> 0 Then _
+            Fail "Compact output extends beyond AP."
+        For rowNumber = 1 To lastRow
+            compactColumn = 1
+            For columnNumber = 1 To 90
+                If Len(CStr(originalValues(rowNumber, columnNumber))) > 0 Then
+                    Do While compactColumn <= 38
+                        If Len(CStr(compactValues(rowNumber, compactColumn))) > 0 Then Exit Do
+                        compactColumn = compactColumn + 1
+                    Loop
+                    If compactColumn > 38 Then Fail "Compact output lost a value."
+                    If CStr(originalValues(rowNumber, columnNumber)) <> CStr(compactValues(rowNumber, compactColumn)) Then _
+                        Fail "Compact output changed value order or text."
+                    compactColumn = compactColumn + 1
+                End If
+            Next columnNumber
+        Next rowNumber
+        pasteSheet.Cells.Clear
+        pasteSheet.Cells(1, 39).Value = "keep"
+        wsSql.OptionButtons("optOutputMode1").Value = xlOn
+        CopyOutput False
+        pasteSheet.Range("A1").PasteSpecial xlPasteAll
+        AssertCellValue pasteSheet.Cells(1, 39), "keep"
+        For rowNumber = 1 To lastRow
+            For columnNumber = 1 To 38
+                If CStr(pasteSheet.Cells(rowNumber, columnNumber).Value2) <> CStr(compactValues(rowNumber, columnNumber)) Then _
+                    Fail "Pasted compact output differs from its source."
+            Next columnNumber
+        Next rowNumber
+    Next sample
+    Application.CutCopyMode = False
+    previousDisplayAlerts = Application.DisplayAlerts
+    Application.DisplayAlerts = False
+    pasteSheet.Delete
+    Application.DisplayAlerts = previousDisplayAlerts
 End Sub
 
 '@TestMethod("CopyOutput")
